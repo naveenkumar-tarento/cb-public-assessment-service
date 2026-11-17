@@ -201,6 +201,32 @@ public class Constants {
 	public static final String COURSE_NAME = "courseName";
 	public static final String COURSE_POSTER_IMAGE ="coursePosterImage";
 	public static final String COURSE_ASSESSMENT = "Course Assessment";
+	public static final String PUBLIC_USER_ASSESSMENT_TABLE ="public_user_assessment_data_test";
+	public static final String API_ASSESSMENT_NOTIFY = "api.assessment.notify";
+	public static final String RECIPIENT_EMAILS = "recipientEmails";
+	public static final String LINK = "link";
+	public static final String COURSE_POSTER_IMAGE_URL= "coursePosterImageUrl";
+	public static final String COURSE_PROVIDER = "courseProvider";
+	public static final String ID = "id";
+	public static final String TYPE = "type";
+	public static final String TEMPLATE = "template";
+	public static final String USER = "user";
+	public static final String CATEGORY = "category";
+	public static final String DATA = "data";
+	public static final String PARAMS = "params";
+	public static final String CONFIG = "config";
+	public static final String NOTIFICATIONS = "notifications";
+	public static final String SUBJECT = "subject";
+	public static final String TABLE_EMAIL_TEMPLATE = "email_template";
+	public static final String CREATED_BY = "createdBy";
+	public static final String CERTIFICATE_LINK = "certificateLink";
+	public static final String COURSE_POSTER_IMAGE_KEY = "coursePosterImage";
+	public static final String E_DATA ="edata";
+	public static final String RELATED = "related";
+    public static final String COURSE_COMPLETION_SUBJECT = "Congratulations on your successful completion of a course at iGOT Karmayogi!";
+	public static final String ISSUED_CERTIFICATE  = "issued_certificates";
+	public static final String CERT_PUBLIC_URL ="cert_publicurl";
+	public static final String COURSE_COMPLETE_SUBJECT = "Course Completion Certificate";
 
 	private Constants() {
 		throw new IllegalStateException("Utility class");

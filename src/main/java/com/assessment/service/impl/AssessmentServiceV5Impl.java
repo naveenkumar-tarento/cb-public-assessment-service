@@ -5,7 +5,10 @@ import com.assessment.datasecurity.DecryptionService;
 import com.assessment.datasecurity.EncryptionService;
 import com.assessment.kafka.Producer;
 import com.assessment.kafka.service.KafkaCertificateProducerService;
+import com.assessment.model.Config;
+import com.assessment.model.NotificationAsyncRequest;
 import com.assessment.model.SBApiResponse;
+import com.assessment.model.Template;
 import com.assessment.repo.AssessmentRepository;
 import com.assessment.service.AssessmentServiceV5;
 import com.assessment.service.AssessmentUtilServiceV2;
@@ -22,6 +25,9 @@ import com.google.gson.reflect.TypeToken;
 import org.apache.commons.collections.CollectionUtils;
 import org.apache.commons.collections.MapUtils;
 import org.apache.commons.lang.StringUtils;
+import org.apache.velocity.VelocityContext;
+import org.apache.velocity.app.VelocityEngine;
+import org.mortbay.util.SingletonList;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -34,6 +40,7 @@ import org.springframework.util.ObjectUtils;
 import javax.validation.Valid;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.StringWriter;
 import java.sql.Timestamp;
 import java.text.SimpleDateFormat;
 import java.util.*;
@@ -90,29 +97,42 @@ public class AssessmentServiceV5Impl implements AssessmentServiceV5 {
         SBApiResponse outgoingResponse = ProjectUtil.createDefaultResponse(Constants.API_SUBMIT_ASSESSMENT);
         long assessmentCompletionTime = Calendar.getInstance().getTime().getTime();
         try {
-            // Step-1 fetch userid
-            String email = (String) submitRequest.get(Constants.EMAIL);
-            if (!ProjectUtil.validateEmailPattern(email)) {
-                updateErrorDetails(outgoingResponse, Constants.INVALID_EMAIL, HttpStatus.BAD_REQUEST);
-                return outgoingResponse;
-            }
-            String contextId = (String) submitRequest.get(Constants.CONTEXT_ID);
-            email = encryptionService.encryptData(email);
-            String assessmentIdFromRequest = (String) submitRequest.get(Constants.IDENTIFIER);
             String errMsg;
             List<Map<String, Object>> sectionListFromSubmitRequest = new ArrayList<>();
             List<Map<String, Object>> hierarchySectionList = new ArrayList<>();
-            Map<String, Object> assessmentHierarchy = new HashMap<>();
             Map<String, Object> existingAssessmentData = new HashMap<>();
-            //Confirm whether the submitted request sections and questions match.
-            errMsg = validateSubmitAssessmentRequest(submitRequest, email, contextId, hierarchySectionList,
-                    sectionListFromSubmitRequest, assessmentHierarchy, existingAssessmentData, editMode);
-            if (StringUtils.isNotBlank(errMsg)) {
-                updateErrorDetails(outgoingResponse, errMsg, HttpStatus.BAD_REQUEST);
-                return outgoingResponse;
+
+            // Step-1 fetch userid
+            String email = (String) submitRequest.get(Constants.EMAIL);
+            String contextId = (String) submitRequest.get(Constants.CONTEXT_ID);
+            String assessmentIdFromRequest = (String) submitRequest.get(Constants.IDENTIFIER);
+
+            SBApiResponse errResponse = validateSubmitAssessmentPayload(email, assessmentIdFromRequest, editMode);
+            if(!ObjectUtils.isEmpty(errResponse)){
+                return errResponse;
             }
+
+            email = encryptionService.encryptData(email);
+            Map<String, Object> assessmentHierarchy = readAssessment(assessmentIdFromRequest, editMode);
+
+            hierarchySectionList.addAll((List<Map<String, Object>>) assessmentHierarchy.get(Constants.CHILDREN));
+            sectionListFromSubmitRequest.addAll((List<Map<String, Object>>) submitRequest.get(Constants.CHILDREN));
+
+            if (((String) (assessmentHierarchy.get(Constants.PRIMARY_CATEGORY)))
+                    .equalsIgnoreCase(Constants.PRACTICE_QUESTION_SET) || editMode) {
+
+            } else {
+
+                errMsg = validateSubmitAssessmentRequest(submitRequest, email, contextId, hierarchySectionList,
+                        sectionListFromSubmitRequest, assessmentHierarchy, existingAssessmentData, editMode);
+                if (StringUtils.isNotBlank(errMsg)) {
+                    updateErrorDetails(outgoingResponse, errMsg, HttpStatus.BAD_REQUEST);
+                    return outgoingResponse;
+                }
+            }
+            //Confirm whether the submitted request sections and questions match.
+
             int maxAssessmentRetakeAttempts = (Integer) assessmentHierarchy.get(Constants.MAX_ASSESSMENT_RETAKE_ATTEMPTS);
-            int retakeAttemptsConsumed = calculateAssessmentRetakeCount(email, assessmentIdFromRequest,contextId);
             String assessmentPrimaryCategory = (String) assessmentHierarchy.get(Constants.PRIMARY_CATEGORY);
             String assessmentType = ((String) assessmentHierarchy.get(Constants.ASSESSMENT_TYPE)).toLowerCase();
             String scoreCutOffType;
@@ -188,12 +208,15 @@ public class AssessmentServiceV5Impl implements AssessmentServiceV5 {
                     assessmentStartTime = assessmentStart.getTime();
                 }
                 int minimumPassPercentage=(int) assessmentHierarchy.get(Constants.MINIMUM_PASS_PERCENTAGE);
-                Map<String, Object> result = calculateSectionFinalResults(sectionLevelsResults, assessmentStartTime, assessmentCompletionTime, maxAssessmentRetakeAttempts, retakeAttemptsConsumed,minimumPassPercentage);
-                outgoingResponse.getResult().putAll(result);
-                outgoingResponse.getParams().setStatus(Constants.SUCCESS);
-                outgoingResponse.setResponseCode(HttpStatus.OK);
-                outgoingResponse.getResult().put(Constants.PRIMARY_CATEGORY, assessmentPrimaryCategory);
+                Map<String, Object> result = calculateSectionFinalResults(sectionLevelsResults, assessmentStartTime, assessmentCompletionTime, maxAssessmentRetakeAttempts,minimumPassPercentage);
+
                 if (!Constants.PRACTICE_QUESTION_SET.equalsIgnoreCase(assessmentPrimaryCategory) && !editMode) {
+                    int retakeAttemptsConsumed = calculateAssessmentRetakeCount(email, assessmentIdFromRequest,contextId);
+                    result.put(Constants.RETAKE_ATTEMPT_CONSUMED, retakeAttemptsConsumed);
+                    outgoingResponse.getResult().putAll(result);
+                    outgoingResponse.getParams().setStatus(Constants.SUCCESS);
+                    outgoingResponse.setResponseCode(HttpStatus.OK);
+                    outgoingResponse.getResult().put(Constants.PRIMARY_CATEGORY, assessmentPrimaryCategory);
                     String questionSetFromAssessmentString = (String) existingAssessmentData
                             .get(Constants.ASSESSMENT_READ_RESPONSE_KEY);
                     Map<String, Object> questionSetFromAssessment = null;
@@ -204,6 +227,12 @@ public class AssessmentServiceV5Impl implements AssessmentServiceV5 {
                     }
                     writeDataToDatabaseAndTriggerKafkaEvent(submitRequest, email, questionSetFromAssessment, result,
                             (String) assessmentHierarchy.get(Constants.PRIMARY_CATEGORY),contextId);
+                }else {
+                    result.put(Constants.RETAKE_ATTEMPT_CONSUMED, 0);
+                    outgoingResponse.getResult().putAll(result);
+                    outgoingResponse.getParams().setStatus(Constants.SUCCESS);
+                    outgoingResponse.setResponseCode(HttpStatus.OK);
+                    outgoingResponse.getResult().put(Constants.PRIMARY_CATEGORY, assessmentPrimaryCategory);
                 }
                 return outgoingResponse;
             }
@@ -246,21 +275,7 @@ public class AssessmentServiceV5Impl implements AssessmentServiceV5 {
 
     private String validateSubmitAssessmentRequest(Map<String, Object> submitRequest, String email, String contextId,
                                                    List<Map<String, Object>> hierarchySectionList, List<Map<String, Object>> sectionListFromSubmitRequest,
-                                                   Map<String, Object> assessmentHierarchy, Map<String, Object> existingAssessmentData, boolean editMode) throws Exception {
-        if (StringUtils.isEmpty((String) submitRequest.get(Constants.IDENTIFIER))) {
-            return Constants.INVALID_ASSESSMENT_ID;
-        }
-        String assessmentIdFromRequest = (String) submitRequest.get(Constants.IDENTIFIER);
-        assessmentHierarchy.putAll(assessUtilServ.readAssessmentHierarchyFromCache(assessmentIdFromRequest, editMode));
-        if (MapUtils.isEmpty(assessmentHierarchy)) {
-            return Constants.READ_ASSESSMENT_FAILED;
-        }
-
-        hierarchySectionList.addAll((List<Map<String, Object>>) assessmentHierarchy.get(Constants.CHILDREN));
-        sectionListFromSubmitRequest.addAll((List<Map<String, Object>>) submitRequest.get(Constants.CHILDREN));
-        if (((String) (assessmentHierarchy.get(Constants.PRIMARY_CATEGORY)))
-                .equalsIgnoreCase(Constants.PRACTICE_QUESTION_SET) || editMode)
-            return "";
+                                                 Map<String, Object> assessmentHierarchy, Map<String, Object> existingAssessmentData, boolean editMode) throws Exception {
 
         List<Map<String, Object>> existingDataList = assessUtilServ.readUserSubmittedAssessmentRecords(
                 email, (String) submitRequest.get(Constants.IDENTIFIER), contextId);
@@ -403,47 +418,16 @@ public class AssessmentServiceV5Impl implements AssessmentServiceV5 {
             if (questionSetFromAssessment.get(Constants.START_TIME) != null) {
                 Long existingAssessmentStartTime = (Long) questionSetFromAssessment.get(Constants.START_TIME);
                 Timestamp startTime = new Timestamp(existingAssessmentStartTime);
+                String assessmentId = (String) submitRequest.get(Constants.IDENTIFIER);
                 Boolean isAssessmentUpdatedToDB = assessmentRepository.updateUserAssesmentDataToDB(email,
-                        (String) submitRequest.get(Constants.IDENTIFIER), submitRequest, result, Constants.SUBMITTED,
-                        startTime, null,contextId);
+                        assessmentId, submitRequest, result, Constants.SUBMITTED,
+                        startTime, null, contextId);
 
                 List<String> notAllowedForKafkaEvent = serverProperties.getAssessmentPrimaryKeyNotAllowedCertificate();
                 if (Boolean.TRUE.equals(isAssessmentUpdatedToDB) && Boolean.TRUE.equals(result.get(Constants.PASS)) && notAllowedForKafkaEvent.stream()
                         .noneMatch(key -> key.equals(primaryCategory))) {
 
-                    SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd");
-                    String completionDate = dateFormat.format(new Date());
-
-                    List<Map<String, Object>> submitedAssessmentDetails = assessmentRepository.fetchUserAssessmentDataFromDB(email, (String) submitRequest.get(Constants.IDENTIFIER));
-                    String recipientName = (String) submitedAssessmentDetails.get(0).get(Constants.NAME);
-
-                    Map<String, Object> propertyMap = new HashMap<>();
-                    propertyMap.put(Constants.IDENTIFIER, submitRequest.get(Constants.COURSE_ID));
-                    List<Map<String, Object>> contentHierarchyDetails = cassandraOperation.getRecordsByProperties(serverProperties.getContentHierarchyNamespace(), serverProperties.getContentHierarchyTable(), propertyMap, null);
-
-                    String contentHierarchyStr = (String) contentHierarchyDetails.get(0).get(Constants.HIERARCHY);
-                    Map<String, Object> contentHierarchyObj = mapper.readValue(contentHierarchyStr, HashMap.class);
-                    String courseProvider = (String) contentHierarchyObj.get(Constants.SOURCE);
-                    String courseName = (String) contentHierarchyObj.get(Constants.NAME);
-                    String coursePosterImage = (String) contentHierarchyObj.get(Constants.POSTER_IMAGE);
-
-
-                    Resource resource = resourceLoader.getResource("classpath:certificate-kafka-json.json");
-                    InputStream inputStream = resource.getInputStream();
-                    JsonNode jsonNode = mapper.readTree(inputStream);
-
-                    Map<String, Object> certificateRequest = new HashMap<>();
-                    certificateRequest.put(Constants.USER_ID, decryptionService.decryptData(email));
-                    certificateRequest.put(Constants.ASSESSMENT_ID_KEY, submitRequest.get(Constants.IDENTIFIER));
-                    certificateRequest.put(Constants.COURSE_ID, submitRequest.get(Constants.COURSE_ID));
-                    certificateRequest.put(Constants.COMPLETION_DATE, completionDate);
-                    certificateRequest.put(Constants.PROVIDER_NAME, courseProvider);
-                    certificateRequest.put(Constants.COURSE_NAME, courseName);
-                    certificateRequest.put(Constants.COURSE_POSTER_IMAGE, coursePosterImage);
-                    certificateRequest.put(Constants.RECIPIENT_NAME, recipientName);
-                    kafkaCertificateProducerService.replacePlaceholders(jsonNode, certificateRequest);
-                    String jsonNodeStr = mapper.writeValueAsString(jsonNode);
-                    producer.push(serverProperties.getKafkaTopicsPublicAssessmentCertificate(), jsonNodeStr);
+                    sendMessageToKafkaForCertificate(submitRequest, email, contextId, assessmentId);
 
                 }
             }
@@ -452,7 +436,47 @@ public class AssessmentServiceV5Impl implements AssessmentServiceV5 {
         }
     }
 
-    private Map<String, Object> calculateSectionFinalResults(List<Map<String, Object>> sectionLevelResults, long assessmentStartTime, long assessmentCompletionTime, int maxAssessmentRetakeAttempts, int retakeAttemptsConsumed, int overallPassPercentage) {
+    private void sendMessageToKafkaForCertificate(Map<String, Object> submitRequest, String email, String contextId, String assessmentId) throws IOException {
+
+        try {
+            SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd");
+            String completionDate = dateFormat.format(new Date());
+
+            List<Map<String, Object>> submitedAssessmentDetails = assessmentRepository.fetchUserAssessmentDataFromDB(email, (String) submitRequest.get(Constants.IDENTIFIER));
+            String recipientName = (String) submitedAssessmentDetails.get(0).get(Constants.NAME);
+
+            Map<String, Object> propertyMap = new HashMap<>();
+            propertyMap.put(Constants.IDENTIFIER, contextId);
+            List<Map<String, Object>> contentHierarchyDetails = cassandraOperation.getRecordsByProperties(serverProperties.getContentHierarchyNamespace(), serverProperties.getContentHierarchyTable(), propertyMap, null);
+
+            String contentHierarchyStr = (String) contentHierarchyDetails.get(0).get(Constants.HIERARCHY);
+            Map<String, Object> contentHierarchyObj = mapper.readValue(contentHierarchyStr, HashMap.class);
+            String courseProvider = (String) contentHierarchyObj.get(Constants.SOURCE);
+            String courseName = (String) contentHierarchyObj.get(Constants.NAME);
+            String coursePosterImage = (String) contentHierarchyObj.get(Constants.POSTER_IMAGE);
+
+
+            Resource resource = resourceLoader.getResource("classpath:certificate-kafka-json.json");
+            InputStream inputStream = resource.getInputStream();
+            JsonNode jsonNode = mapper.readTree(inputStream);
+
+            Map<String, Object> certificateRequest = new HashMap<>();
+            certificateRequest.put(Constants.USER_ID, decryptionService.decryptData(email));
+            certificateRequest.put(Constants.ASSESSMENT_ID_KEY, assessmentId);
+            certificateRequest.put(Constants.COURSE_ID, contextId);
+            certificateRequest.put(Constants.COMPLETION_DATE, completionDate);
+            certificateRequest.put(Constants.PROVIDER_NAME, courseProvider);
+            certificateRequest.put(Constants.COURSE_NAME, courseName);
+            certificateRequest.put(Constants.COURSE_POSTER_IMAGE, coursePosterImage);
+            certificateRequest.put(Constants.RECIPIENT_NAME, recipientName);
+            kafkaCertificateProducerService.replacePlaceholders(jsonNode, certificateRequest);
+            producer.push(serverProperties.getKafkaTopicsPublicAssessmentCertificate(), jsonNode);
+        }catch (Exception e){
+            logger.error("Failed to send kafka message: ", e);
+        }
+    }
+
+    private Map<String, Object> calculateSectionFinalResults(List<Map<String, Object>> sectionLevelResults, long assessmentStartTime, long assessmentCompletionTime, int maxAssessmentRetakeAttempts, int overallPassPercentage) {
         Map<String, Object> res = new HashMap<>();
         Double result;
         Integer correct = 0;
@@ -492,7 +516,6 @@ public class AssessmentServiceV5Impl implements AssessmentServiceV5 {
             res.put(Constants.INCORRECT, inCorrect);
             res.put(Constants.TIME_TAKEN_FOR_ASSESSMENT, assessmentCompletionTime - assessmentStartTime);
             res.put(Constants.MAX_ASSESSMENT_RETAKE_ATTEMPTS, maxAssessmentRetakeAttempts);
-            res.put(Constants.RETAKE_ATTEMPT_CONSUMED, retakeAttemptsConsumed);
             double totalPercentage = (totalSectionMarks / (double) totalMarks) * 100;
             res.put(Constants.PASS, totalPercentage >= overallPassPercentage);
             res.put(Constants.TOTAL_PERCENTAGE, totalPercentage);
@@ -894,7 +917,6 @@ public class AssessmentServiceV5Impl implements AssessmentServiceV5 {
             errMsg = "One or more mandatory fields are missing in Request. Mandatory fields are : "
                     + missingAttribs.toString();
         }
-
         return errMsg;
     }
 
@@ -1047,6 +1069,340 @@ public class AssessmentServiceV5Impl implements AssessmentServiceV5 {
                 ? (String) existingDataList.get(0).get(Constants.ASSESSMENT_READ_RESPONSE_KEY)
                 : "";
 
+    }
+
+    private SBApiResponse validateSubmitAssessmentPayload(String email, String assessmentIdFromRequest, boolean editMode){
+
+        SBApiResponse response = ProjectUtil.createDefaultResponse(Constants.API_SUBMIT_ASSESSMENT);
+
+        if (StringUtils.isEmpty(assessmentIdFromRequest)) {
+            updateErrorDetails(response, Constants.INVALID_ASSESSMENT_ID,
+                    HttpStatus.INTERNAL_SERVER_ERROR);
+            return response;
+        }
+
+        Map<String, Object> assessmentHierarchyRead = readAssessment(assessmentIdFromRequest, editMode);
+        //Step-2 : If assessment is empty throw validation error
+        if (MapUtils.isEmpty(assessmentHierarchyRead)) {
+            updateErrorDetails(response, Constants.ASSESSMENT_HIERARCHY_READ_FAILED,
+                    HttpStatus.INTERNAL_SERVER_ERROR);
+            return response;
+        }
+        //Step-3 : If assessment is practice question set send back the response
+        if (Constants.COURSE_ASSESSMENT
+                .equalsIgnoreCase((String) assessmentHierarchyRead.get(Constants.PRIMARY_CATEGORY)) || editMode) {
+
+            if (!ProjectUtil.validateEmailPattern(email)) {
+                updateErrorDetails(response, Constants.INVALID_EMAIL, HttpStatus.BAD_REQUEST);
+                return response;
+            }
+        }
+        return null;
+    }
+  
+    @Override
+    public void processNotification (Map<String, Object> request) {
+        logger.info("kafka notification processing started");
+        try {
+            logger.info("Processing notification request: " + mapper.writeValueAsString(request));
+            String error = validateAssessmentRequest(request);
+            if (StringUtils.isNotBlank(error)) {
+                logger.info(error);
+                return ;
+            }
+            Map<String, Object> edata = (Map<String, Object>) request.get(Constants.E_DATA);
+            Map<String, Object> related = (Map<String, Object>)edata.get(Constants.RELATED);
+            Map<String, Object> propertyMap = new HashMap<>();
+            /*String email = encryptionService.encryptData((String) edata.get(Constants.USER_ID));
+            propertyMap.put(Constants.USER_ID, email);
+            propertyMap.put(Constants.ASSESSMENT_ID_KEY,request.get(Constants.ASSESSMENT_IDENTIFIER));
+            propertyMap.put(Constants.CONTEXT_ID, related.get(Constants.COURSE_ID));
+            List<Map<String, Object>> cassandraResponse = cassandraOperation.getRecordsByPropertiesWithoutFiltering(Constants.SUNBIRD_KEY_SPACE_NAME, serverProperties.getPublicUserAssessmentData(), propertyMap,null, null);
+            String userValidationResponse = validateUserAssementData(cassandraResponse);
+            if (StringUtils.isNotBlank(userValidationResponse)) {
+                logger.info(userValidationResponse);
+                return response;
+            }*/
+
+            Map<String, Object> mailNotificationDetails = new HashMap<>();
+            mailNotificationDetails.put(Constants.RECIPIENT_EMAILS, Collections.singletonList((String)edata.get(Constants.USER_ID)));
+            mailNotificationDetails.put(Constants.COURSE_NAME, edata.get(Constants.COURSE_NAME));
+            mailNotificationDetails.put(Constants.COURSE_POSTER_IMAGE_URL, edata.get(Constants.COURSE_POSTER_IMAGE));
+            mailNotificationDetails.put(Constants.SUBJECT,Constants.COURSE_COMPLETION_SUBJECT);
+            sendAssessmentNotification(mailNotificationDetails,serverProperties.getPublicAssessmentCompletionTemplate(),false);
+            logger.info("assessment notification sent successfully");
+        }catch (Exception e){
+            logger.error("failed to send the assessment notification :: " + e);
+        }
+    }
+
+    private void sendAssessmentNotification(Map<String, Object> mailNotificationDetails,String templateName,boolean isCertificateNotification) {
+        Map<String, Object> params = new HashMap<>();
+        NotificationAsyncRequest notificationRequest = new NotificationAsyncRequest();
+        Map<String, Object> action = new HashMap<>();
+        Map<String, Object> templ = new HashMap<>();
+        Map<String, Object> usermap = new HashMap<>();
+        params.put(Constants.COURSE_NAME, mailNotificationDetails.get(Constants.COURSE_NAME));
+        params.put(Constants.COURSE_POSTER_IMAGE_KEY, mailNotificationDetails.get(Constants.COURSE_POSTER_IMAGE_URL));
+        if(isCertificateNotification){
+            params.put(Constants.CERTIFICATE_LINK, mailNotificationDetails.get(Constants.CERTIFICATE_LINK));
+        }
+        Template template = new Template(constructEmailTemplate(templateName, params), templateName, params);
+        usermap.put(Constants.ID, "");
+        usermap.put(Constants.TYPE, Constants.USER);
+        action.put(Constants.TEMPLATE, templ);
+        action.put(Constants.TYPE, Constants.EMAIL);
+        action.put(Constants.CATEGORY, Constants.EMAIL);
+        action.put(Constants.CREATED_BY, usermap);
+        Config config = new Config();
+        config.setSubject((String) mailNotificationDetails.get(Constants.SUBJECT));
+        config.setSender(serverProperties.getSupportEmail());
+        templ.put(Constants.TYPE, Constants.EMAIL);
+        templ.put(Constants.DATA, template.getData());
+        templ.put(Constants.ID, template.getId());
+        templ.put(Constants.PARAMS, params);
+        templ.put(Constants.CONFIG, config);
+        notificationRequest.setType(Constants.EMAIL);
+        notificationRequest.setPriority(1);
+        notificationRequest.setIds((List<String>) mailNotificationDetails.get(Constants.RECIPIENT_EMAILS));
+        notificationRequest.setAction(action);
+
+        Map<String, Object> req = new HashMap<>();
+        Map<String, List<NotificationAsyncRequest>> notificationMap = new HashMap<>();
+        notificationMap.put(Constants.NOTIFICATIONS, Collections.singletonList(notificationRequest));
+        req.put(Constants.REQUEST, notificationMap);
+        sendNotification(req);
+    }
+
+    private String constructEmailTemplate(String templateName, Map<String, Object> params) {
+        String replacedHTML = new String();
+        try {
+            Map<String, Object> propertyMap = new HashMap<>();
+            propertyMap.put(Constants.NAME, templateName);
+            List<Map<String, Object>> templateMap = cassandraOperation.getRecordsByProperties(Constants.KEYSPACE_SUNBIRD, Constants.TABLE_EMAIL_TEMPLATE, propertyMap, Collections.singletonList(Constants.TEMPLATE));
+            String htmlTemplate = templateMap.stream()
+                    .findFirst()
+                    .map(template -> (String) template.get(Constants.TEMPLATE))
+                    .orElse(null);
+            VelocityEngine velocityEngine = new VelocityEngine();
+            velocityEngine.init();
+            VelocityContext context = new VelocityContext();
+            for (Map.Entry<String, Object> entry : params.entrySet()) {
+                context.put(entry.getKey(), entry.getValue());
+            }
+            StringWriter writer = new StringWriter();
+            velocityEngine.evaluate(context, writer, "HTMLTemplate", htmlTemplate);
+            replacedHTML = writer.toString();
+        } catch (Exception e) {
+            logger.error("Unable to create template ", e);
+        }
+        return replacedHTML;
+    }
+
+    public String validateAssessmentRequest(Map<String,Object> request){
+        StringBuffer str = new StringBuffer();
+        List<String> errList = new ArrayList<>();
+
+        if (ObjectUtils.isEmpty(request)) {
+            str.append("Request object is empty.");
+            return str.toString();
+        }
+        if (StringUtils.isBlank((String) request.get(Constants.ASSESSMENT_ID_KEY))) {
+            errList.add(Constants.ASSESSMENT_ID_KEY);
+            return str.append("Failed to Due To Missing Params - ").append(errList).append(".").toString();
+        }
+        Map<String, Object> edata = (Map<String, Object>) request.get(Constants.E_DATA);
+
+        if (StringUtils.isEmpty((String) edata.get(Constants.USER_ID))) {
+            errList.add(Constants.USER_ID);
+            return str.append("Failed to Due To Missing Params - ").append(errList).append(".").toString();
+        }
+        Map<String, Object> related = (Map<String, Object>)edata.get(Constants.RELATED);
+        if (StringUtils.isEmpty((String) related.get(Constants.COURSE_ID))) {
+            errList.add(Constants.COURSE_ID);
+            return str.append("Failed to Due To Missing Params - ").append(errList).append(".").toString();
+        }
+        if (!errList.isEmpty()) {
+            str.append("Failed to Due To Missing Params - ").append(errList).append(".");
+        }
+        return str.toString();
+    }
+
+    private void sendNotification(Map<String, Object> request) {
+        StringBuilder builder = new StringBuilder();
+        builder.append(serverProperties.getNotifyServiceHost()).append(serverProperties.getNotifyServicePathAsync());
+        try {
+            logger.info(mapper.writeValueAsString(request));
+            Map<String, Object> response = outboundRequestHandlerService.fetchResultUsingPost(builder.toString(), request, null);
+            logger.debug("The email notification is successfully sent, response is: " + response);
+        } catch (Exception e) {
+            logger.error("Exception while posting the data in notification service: ", e);
+        }
+    }
+
+    private String validateUserAssementData(List<Map<String, Object>> userAssessmentData) {
+        String error = "";
+
+        if (CollectionUtils.isEmpty(userAssessmentData)) {
+            error = "User assessment data not found";
+            return error;
+        }
+        Map<String, Object> userAssessmentDataMap =userAssessmentData.get(0);
+        if(Boolean.FALSE.equals(userAssessmentDataMap.get(Constants.PASS_STATUS))){
+            error = "assessment is not passed";
+            return error;
+        }
+        return error;
+    }
+
+    @Override
+    public SBApiResponse assessmentCertificateReissue(Map<String, Object> requestBody) {
+        logger.info("AssessmentServiceV5Impl::CertificateReissue.. started");
+        SBApiResponse response = ProjectUtil.createDefaultResponse(Constants.API_SUBMIT_ASSESSMENT);
+        String errMsg = "";
+        try {
+            String email = (String) requestBody.get(Constants.EMAIL);
+            String assessmentId = (String) requestBody.get(Constants.ASSESSMENT_IDENTIFIER);
+            String contextId = (String) requestBody.get(Constants.CONTEXT_ID);
+
+            if (StringUtils.isEmpty(email) || StringUtils.isEmpty(assessmentId) || StringUtils.isEmpty(contextId)) {
+                updateErrorDetails(response, Constants.INVALID_REQUEST, HttpStatus.BAD_REQUEST);
+                return response;
+            }
+            if (!ProjectUtil.validateEmailPattern(email)) {
+                updateErrorDetails(response, Constants.INVALID_EMAIL, HttpStatus.BAD_REQUEST);
+                return response;
+            }
+
+            String encryptedEmail = encryptionService.encryptData(email);
+            List<Map<String, Object>> submitedAssessmentDetails = assessmentRepository.fetchUserAssessmentDataFromDB(encryptedEmail, assessmentId);
+            if (CollectionUtils.isEmpty(submitedAssessmentDetails)) {
+                String recipientName = (String) submitedAssessmentDetails.get(0).get(Constants.NAME);
+                Boolean passStatus = (Boolean) submitedAssessmentDetails.get(0).get(Constants.PASS_STATUS);
+
+                if (Boolean.TRUE.equals(passStatus)) {
+                    List<Map<String, Object>> issuedCertificates = (List<Map<String, Object>>) submitedAssessmentDetails.get(0).get(Constants.ISSUED_CERTIFICATE);
+                    String certPublicUrl = (String) submitedAssessmentDetails.get(0).get(Constants.CERT_PUBLIC_URL);
+                    if (!CollectionUtils.isEmpty(issuedCertificates)) {
+                        logger.info("AssessmentServiceV5Impl::raising event to cert pdf generator");
+                        resendMessageToKafkaForCertificate(recipientName, encryptedEmail, contextId, assessmentId);
+                    } else if (!StringUtils.isEmpty(certPublicUrl)) {
+
+                        logger.info("AssessmentServiceV5Impl::raising event to cert post pdf generator");
+                        Map<String, Object> kafkaInputPostPdfGeneration = new HashMap<>();
+                        kafkaInputPostPdfGeneration.put("userid", email);
+                        kafkaInputPostPdfGeneration.put("courseid", contextId);
+                        kafkaInputPostPdfGeneration.put("assessmentid", assessmentId);
+                        producer.push(serverProperties.getPublicAssessmentCertGenerationPostProcessTopic(), kafkaInputPostPdfGeneration);
+                    } else {
+                        logger.info("AssessmentServiceV5Impl::notify user on email");
+                        Map<String, Object> notificationInput = new HashMap<>();
+                        notificationInput.put(Constants.USER_ID, email);
+                        notificationInput.put(Constants.CONTEXT_ID, contextId);
+                        notificationInput.put(Constants.ASSESSMENT_ID_KEY, assessmentId);
+                        producer.push(serverProperties.getSpringKafkaPublicAssessmentNotificationTopicName(), notificationInput);
+
+                    }
+                } else {
+                    errMsg = "User assessment did not pass.";
+                    updateErrorDetails(response, errMsg, HttpStatus.BAD_REQUEST);
+                    return response;
+                }
+            } else {
+                errMsg = "User assessment data is not available";
+                updateErrorDetails(response, errMsg, HttpStatus.BAD_REQUEST);
+                return response;
+            }
+        } catch (Exception e) {
+            errMsg = "Failed to read user assessment data for certificate reissue.";
+            logger.error("{}Exception: ", errMsg, e);
+            updateErrorDetails(response, errMsg, HttpStatus.BAD_REQUEST);
+            return response;
+        }
+        response.getParams().setStatus(Constants.SUCCESS);
+        response.setResponseCode(HttpStatus.OK);
+        return response;
+    }
+
+    private void resendMessageToKafkaForCertificate(String recipientName, String email, String contextId, String assessmentId) throws IOException {
+
+        try {
+            SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd");
+            String completionDate = dateFormat.format(new Date());
+
+            Map<String, Object> propertyMap = new HashMap<>();
+            propertyMap.put(Constants.IDENTIFIER, contextId);
+            List<Map<String, Object>> contentHierarchyDetails = cassandraOperation.getRecordsByProperties(serverProperties.getContentHierarchyNamespace(), serverProperties.getContentHierarchyTable(), propertyMap, null);
+
+            String contentHierarchyStr = (String) contentHierarchyDetails.get(0).get(Constants.HIERARCHY);
+            Map<String, Object> contentHierarchyObj = mapper.readValue(contentHierarchyStr, HashMap.class);
+            String courseProvider = (String) contentHierarchyObj.get(Constants.SOURCE);
+            String courseName = (String) contentHierarchyObj.get(Constants.NAME);
+            String coursePosterImage = (String) contentHierarchyObj.get(Constants.POSTER_IMAGE);
+
+
+            Resource resource = resourceLoader.getResource("classpath:certificate-kafka-json.json");
+            InputStream inputStream = resource.getInputStream();
+            JsonNode jsonNode = mapper.readTree(inputStream);
+
+            Map<String, Object> certificateRequest = new HashMap<>();
+            certificateRequest.put(Constants.USER_ID, decryptionService.decryptData(email));
+            certificateRequest.put(Constants.ASSESSMENT_ID_KEY, assessmentId);
+            certificateRequest.put(Constants.COURSE_ID, contextId);
+            certificateRequest.put(Constants.COMPLETION_DATE, completionDate);
+            certificateRequest.put(Constants.PROVIDER_NAME, courseProvider);
+            certificateRequest.put(Constants.COURSE_NAME, courseName);
+            certificateRequest.put(Constants.COURSE_POSTER_IMAGE, coursePosterImage);
+            certificateRequest.put(Constants.RECIPIENT_NAME, recipientName);
+            kafkaCertificateProducerService.replacePlaceholders(jsonNode, certificateRequest);
+            producer.push(serverProperties.getKafkaTopicsPublicAssessmentCertificate(), jsonNode);
+        } catch (Exception e) {
+            logger.error("Failed to send kafka message: ", e);
+        }
+    }
+
+    @Override
+    public void processDownloadNotification(Map<String, Object> notificationRequest) {
+        try {
+           String userId = (String) notificationRequest.get("userid");
+            String contextId = (String) (notificationRequest.get("courseid") != null ? notificationRequest.get("courseid") : notificationRequest.get("contextid"));
+            String assessmentId = (String) notificationRequest.get("assessmentid");
+            Map<String, Object> propertyMap = new HashMap<>();
+            String encryptedEmail= encryptionService.encryptData(userId );
+            propertyMap.put(Constants.USER_ID, encryptedEmail);
+            propertyMap.put(Constants.ASSESSMENT_ID_KEY, assessmentId);
+            propertyMap.put(Constants.CONTEXT_ID, contextId);
+            List<Map<String, Object>> cassandraResponse = cassandraOperation.getRecordsByPropertiesWithoutFiltering(Constants.SUNBIRD_KEY_SPACE_NAME, serverProperties.getPublicUserAssessmentData(), propertyMap,null, null);
+            if(CollectionUtils.isEmpty(cassandraResponse)){
+                logger.info("");
+            }else {
+                String certificateUrl = (String)cassandraResponse.get(0).get("cert_publicurl");
+                if(certificateUrl.contains(serverProperties.getCloudStorageUrl())){
+                    certificateUrl = certificateUrl.replace(serverProperties.getCloudStorageUrl(),"");
+                }
+                String linkUrl = serverProperties.getPublicAccessUrl()+certificateUrl;
+
+                Map<String, Object> hierachyMap = new HashMap<>();
+                hierachyMap.put(Constants.IDENTIFIER, contextId);
+                List<Map<String, Object>> contentHierarchyDetails = cassandraOperation.getRecordsByProperties(serverProperties.getContentHierarchyNamespace(), serverProperties.getContentHierarchyTable(), hierachyMap, null);
+
+                String contentHierarchyStr = (String) contentHierarchyDetails.get(0).get(Constants.HIERARCHY);
+                Map<String, Object> contentHierarchyObj = mapper.readValue(contentHierarchyStr, HashMap.class);
+                String courseName = (String) contentHierarchyObj.get(Constants.NAME);
+                String coursePosterImage = (String) contentHierarchyObj.get(Constants.POSTER_IMAGE);
+
+                Map<String, Object> notificationData = new HashMap<>();
+                notificationData.put(Constants.RECIPIENT_EMAILS,Collections.singletonList(userId));
+                notificationData.put(Constants.COURSE_NAME, courseName);
+                notificationData.put(Constants.COURSE_POSTER_IMAGE_URL, coursePosterImage);
+                notificationData.put(Constants.CERTIFICATE_LINK, linkUrl);
+                notificationData.put(Constants.SUBJECT,Constants.COURSE_COMPLETE_SUBJECT);
+                sendAssessmentNotification(notificationData,serverProperties.getPublicAssessmentCertificateTemplate(),true);
+            }
+        }catch (Exception e){
+            logger.info(e.getMessage());
+
+        }
     }
 
 }

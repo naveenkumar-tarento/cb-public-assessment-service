@@ -33,4 +33,10 @@ public interface AssessmentServiceV5 {
     SBApiResponse readQuestionList(@Valid Map<String, Object> requestBody, Boolean edit);
 
     public SBApiResponse readAssessmentResultV5(Map<String, Object> request);
+
+    void processNotification(Map<String, Object> notificationRequest);
+
+    public SBApiResponse assessmentCertificateReissue( Map<String, Object> requestBody);
+
+    void processDownloadNotification(Map<String, Object> notificationRequest);
 }

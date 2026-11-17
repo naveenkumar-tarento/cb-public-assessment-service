@@ -93,6 +93,38 @@ public class ServerProperties {
 	@Value("${assessment.primarykey.notallowed.certificate}")
 	private String assessmentPrimaryKeyNotAllowedCertificate;
 
+	@Value("${notify.service.host}")
+	private String notifyServiceHost;
+
+	@Value("${notify.service.path.async}")
+	private String notifyServicePathAsync;
+
+	@Value("${notification.support.mail}")
+	private String supportEmail;
+
+	@Value("${public.assessment.certificate.template}")
+	private String publicAssessmentCertificateTemplate;
+
+	@Value("${kafka.topic.certificate.assessment.group}")
+	private String kafkaTopicCertificateAssessmentGroup;
+
+	@Value("${kafka.topic.certificate.request}")
+	private String kafkaTopicCertificateRequest;
+
+	@Value("${public.assessment.completion.template}")
+	private String publicAssessmentCompletionTemplate;
+
+	@Value("${public.access.url}")
+	private String publicAccessUrl;
+
+	@Value("${spring.kafka.public.assessment.notification.topic.name}")
+	private String springKafkaPublicAssessmentNotificationTopicName;
+
+	@Value("${public.assessment.cert.generation.post.process.topic}")
+	private String publicAssessmentCertGenerationPostProcessTopic;
+	@Value("${storage.cloud.url}")
+	private String cloudStorageUrl;
+
 	public String getAssessmentQuestionListPath() {
 		return assessmentQuestionListPath;
 	}
@@ -307,5 +339,80 @@ public class ServerProperties {
 
 	public void setAssessmentPrimaryKeyNotAllowedCertificate(String assessmentPrimaryKeyNotAllowedCertificate) {
 		this.assessmentPrimaryKeyNotAllowedCertificate = assessmentPrimaryKeyNotAllowedCertificate;
+	}
+
+	public String getNotifyServiceHost() { return notifyServiceHost; }
+
+	public void setNotifyServiceHost(String notifyServiceHost) { this.notifyServiceHost = notifyServiceHost; }
+
+	public String getNotifyServicePathAsync() { return notifyServicePathAsync; }
+
+	public void setNotifyServicePathAsync(String notifyServicePathAsync) { this.notifyServicePathAsync = notifyServicePathAsync;}
+
+	public String getSupportEmail() { return supportEmail; }
+
+	public void setSupportEmail(String supportEmail) { this.supportEmail = supportEmail; }
+
+	public String getPublicAssessmentCertificateTemplate() { return publicAssessmentCertificateTemplate; }
+
+	public void setPublicAssessmentCertificateTemplate(String publicAssessmentCertificateTemplate) {
+		this.publicAssessmentCertificateTemplate = publicAssessmentCertificateTemplate;
+	}
+
+	public String getKafkaTopicCertificateAssessmentGroup() {
+		return kafkaTopicCertificateAssessmentGroup;
+	}
+
+	public void setKafkaTopicCertificateAssessmentGroup(String kafkaTopicCertificateAssessmentGroup) {
+		this.kafkaTopicCertificateAssessmentGroup = kafkaTopicCertificateAssessmentGroup;
+	}
+
+	public String getKafkaTopicCertificateRequest() {
+		return kafkaTopicCertificateRequest;
+	}
+
+	public void setKafkaTopicCertificateRequest(String kafkaTopicCertificateRequest) {
+		this.kafkaTopicCertificateRequest = kafkaTopicCertificateRequest;
+	}
+
+	public String getPublicAssessmentCompletionTemplate() {
+		return publicAssessmentCompletionTemplate;
+	}
+
+	public void setPublicAssessmentCompletionTemplate(String publicAssessmentCompletionTemplate) {
+		this.publicAssessmentCompletionTemplate = publicAssessmentCompletionTemplate;
+	}
+
+	public String getPublicAccessUrl() {
+		return publicAccessUrl;
+	}
+
+	public void setPublicAccessUrl(String publicAccessUrl) {
+		this.publicAccessUrl = publicAccessUrl;
+	}
+
+
+	public String getSpringKafkaPublicAssessmentNotificationTopicName() {
+		return springKafkaPublicAssessmentNotificationTopicName;
+	}
+
+	public void setSpringKafkaPublicAssessmentNotificationTopicName(String springKafkaPublicAssessmentNotificationTopicName) {
+		this.springKafkaPublicAssessmentNotificationTopicName = springKafkaPublicAssessmentNotificationTopicName;
+	}
+
+	public String getPublicAssessmentCertGenerationPostProcessTopic() {
+		return publicAssessmentCertGenerationPostProcessTopic;
+	}
+
+	public void setPublicAssessmentCertGenerationPostProcessTopic(String publicAssessmentCertGenerationPostProcessTopic) {
+		this.publicAssessmentCertGenerationPostProcessTopic = publicAssessmentCertGenerationPostProcessTopic;
+	}
+
+	public String getCloudStorageUrl() {
+		return cloudStorageUrl;
+	}
+
+	public void setCloudStorageUrl(String cloudStorageUrl) {
+		this.cloudStorageUrl = cloudStorageUrl;
 	}
 }
