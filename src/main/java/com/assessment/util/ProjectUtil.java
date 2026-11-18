@@ -243,6 +243,122 @@ public class ProjectUtil {
     }
 
     /**
+     * Shared by AssessmentServiceV4Impl/AssessmentServiceV5Impl (each used twice internally),
+     * which were each carrying an identical copy of this question-set extraction.
+     */
+    public static Map<String, Object> extractQuestionSetFromAssessment(Map<String, Object> existingAssessmentData,
+            ObjectMapper mapper) throws java.io.IOException {
+        String questionSetFromAssessmentString = (String) existingAssessmentData
+                .get(Constants.ASSESSMENT_READ_RESPONSE_KEY);
+        Map<String, Object> questionSetFromAssessment = null;
+        if (StringUtils.isNotBlank(questionSetFromAssessmentString)) {
+            questionSetFromAssessment = mapper.readValue(questionSetFromAssessmentString,
+                    new TypeReference<Map<String, Object>>() {
+                    });
+        }
+        return questionSetFromAssessment;
+    }
+
+    /**
+     * Shared by AssessmentServiceV4Impl/AssessmentServiceV5Impl, which were each carrying an
+     * identical copy of this per-section question lookup used inside the hierarchySectionList
+     * loop in submitAssessmentAsync.
+     */
+    @SuppressWarnings("unchecked")
+    public static List<Map<String, Object>> findUserSectionQuestions(Map<String, Object> hierarchySection,
+            List<Map<String, Object>> sectionListFromSubmitRequest, String scoreCutOffType) {
+        String hierarchySectionId = (String) hierarchySection.get(Constants.IDENTIFIER);
+        String userSectionId = "";
+        Map<String, Object> userSectionData = new HashMap<>();
+        for (Map<String, Object> sectionFromSubmitRequest : sectionListFromSubmitRequest) {
+            userSectionId = (String) sectionFromSubmitRequest.get(Constants.IDENTIFIER);
+            if (userSectionId.equalsIgnoreCase(hierarchySectionId)) {
+                userSectionData = sectionFromSubmitRequest;
+                break;
+            }
+        }
+
+        hierarchySection.put(Constants.SCORE_CUTOFF_TYPE, scoreCutOffType);
+        List<Map<String, Object>> questionsListFromSubmitRequest = new ArrayList<>();
+        if (userSectionData.containsKey(Constants.CHILDREN)
+                && !ObjectUtils.isEmpty(userSectionData.get(Constants.CHILDREN))) {
+            questionsListFromSubmitRequest = (List<Map<String, Object>>) userSectionData.get(Constants.CHILDREN);
+        }
+        return questionsListFromSubmitRequest;
+    }
+
+    /**
+     * Shared by AssessmentServiceV4Impl/AssessmentServiceV5Impl, which were each carrying an
+     * identical copy of this existing-submission validation (expiry + question-id match check).
+     */
+    public static String validateExistingAssessmentSubmission(List<Map<String, Object>> existingDataList,
+            Map<String, Object> existingAssessmentData, Map<String, Object> assessmentHierarchy,
+            List<Map<String, Object>> hierarchySectionList, List<Map<String, Object>> sectionListFromSubmitRequest,
+            ServerProperties serverProperties, ObjectMapper mapper) throws Exception {
+        if (existingDataList.isEmpty()) {
+            return Constants.USER_ASSESSMENT_DATA_NOT_PRESENT;
+        } else {
+            existingAssessmentData.putAll(existingDataList.get(0));
+        }
+
+        Date assessmentStartTime = (Date) existingAssessmentData.get(Constants.START_TIME);
+        if (assessmentStartTime == null) {
+            return Constants.READ_ASSESSMENT_START_TIME_FAILED;
+        }
+        int expectedDuration = (Integer) assessmentHierarchy.get(Constants.EXPECTED_DURATION);
+        Timestamp later = calculateAssessmentSubmitTime(expectedDuration, new Timestamp(assessmentStartTime.getTime()),
+                Integer.parseInt(serverProperties.getUserAssessmentSubmissionDuration()), serverProperties);
+        Timestamp submissionTime = new Timestamp(new Date().getTime());
+        int time = submissionTime.compareTo(later);
+        if (time <= 0) {
+            List<String> desiredKeys = Lists.newArrayList(Constants.IDENTIFIER);
+            List<Object> hierarchySectionIds = hierarchySectionList.stream()
+                    .flatMap(x -> desiredKeys.stream().filter(x::containsKey).map(x::get)).collect(toList());
+            List<Object> submitSectionIds = sectionListFromSubmitRequest.stream()
+                    .flatMap(x -> desiredKeys.stream().filter(x::containsKey).map(x::get)).collect(toList());
+            if (!new HashSet<>(hierarchySectionIds).containsAll(submitSectionIds)) {
+                return Constants.WRONG_SECTION_DETAILS;
+            } else {
+                String areQuestionIdsSame = validateIfQuestionIdsAreSame(null, sectionListFromSubmitRequest,
+                        desiredKeys, existingAssessmentData, mapper);
+                if (!areQuestionIdsSame.isEmpty())
+                    return areQuestionIdsSame;
+            }
+        } else {
+            return Constants.ASSESSMENT_SUBMIT_EXPIRED;
+        }
+
+        return "";
+    }
+
+    /**
+     * Shared by AssessmentServiceV4Impl/AssessmentServiceV5Impl, which were each carrying an
+     * identical copy of this final-results calculation (V5 additionally copies the NAME field).
+     */
+    public static Map<String, Object> calculateAssessmentFinalResults(Map<String, Object> assessmentLevelResult,
+            boolean includeName, Logger logger) {
+        Map<String, Object> res = new HashMap<>();
+        try {
+            res.put(Constants.CHILDREN, Collections.singletonList(assessmentLevelResult));
+            Double result = (Double) assessmentLevelResult.get(Constants.RESULT);
+            res.put(Constants.OVERALL_RESULT, result);
+            res.put(Constants.TOTAL, assessmentLevelResult.get(Constants.TOTAL));
+            res.put(Constants.BLANK, assessmentLevelResult.get(Constants.BLANK));
+            res.put(Constants.CORRECT, assessmentLevelResult.get(Constants.CORRECT));
+            res.put(Constants.PASS_PERCENTAGE, assessmentLevelResult.get(Constants.PASS_PERCENTAGE));
+            res.put(Constants.INCORRECT, assessmentLevelResult.get(Constants.INCORRECT));
+            if (includeName) {
+                res.put(Constants.NAME, assessmentLevelResult.get(Constants.NAME));
+            }
+            Integer minimumPassPercentage = (Integer) assessmentLevelResult.get(Constants.PASS_PERCENTAGE);
+            res.put(Constants.PASS, result >= minimumPassPercentage);
+        } catch (Exception e) {
+            logger.error("Failed to calculate Assessment final results. Exception: ", e);
+        }
+        return res;
+    }
+
+    /**
      * Shared by EncryptionServiceImpl and DecryptionServiceImpl, which each carried an identical
      * copy of this algorithm/key-generation logic.
      */

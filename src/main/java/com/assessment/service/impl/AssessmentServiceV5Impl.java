@@ -144,48 +144,27 @@ public class AssessmentServiceV5Impl implements AssessmentServiceV5 {
             }
             List<Map<String, Object>> sectionLevelsResults = new ArrayList<>();
             for (Map<String, Object> hierarchySection : hierarchySectionList) {
-                String hierarchySectionId = (String) hierarchySection.get(Constants.IDENTIFIER);
-                String userSectionId = "";
-                Map<String, Object> userSectionData = new HashMap<>();
-                for (Map<String, Object> sectionFromSubmitRequest : sectionListFromSubmitRequest) {
-                    userSectionId = (String) sectionFromSubmitRequest.get(Constants.IDENTIFIER);
-                    if (userSectionId.equalsIgnoreCase(hierarchySectionId)) {
-                        userSectionData = sectionFromSubmitRequest;
-                        break;
-                    }
-                }
-
-                hierarchySection.put(Constants.SCORE_CUTOFF_TYPE, scoreCutOffType);
-                List<Map<String, Object>> questionsListFromSubmitRequest = new ArrayList<>();
-                if (userSectionData.containsKey(Constants.CHILDREN)
-                        && !ObjectUtils.isEmpty(userSectionData.get(Constants.CHILDREN))) {
-                    questionsListFromSubmitRequest = (List<Map<String, Object>>) userSectionData
-                            .get(Constants.CHILDREN);
-                }
+                List<Map<String, Object>> questionsListFromSubmitRequest = ProjectUtil.findUserSectionQuestions(
+                        hierarchySection, sectionListFromSubmitRequest, scoreCutOffType);
                 List<String> desiredKeys = Lists.newArrayList(Constants.IDENTIFIER);
                 List<Object> questionsList = questionsListFromSubmitRequest.stream()
                         .flatMap(x -> desiredKeys.stream().filter(x::containsKey).map(x::get)).collect(toList());
                 List<String> questionsListFromAssessmentHierarchy = questionsList.stream()
                         .map(object -> Objects.toString(object, null)).collect(toList());
                 Map<String, Object> result = new HashMap<>();
+                String hierarchySectionId = (String) hierarchySection.get(Constants.IDENTIFIER);
                 Map<String, Object> questionSetDetailsMap = getParamDetailsForQTypes(hierarchySection, assessmentHierarchy, hierarchySectionId);
                 switch (scoreCutOffType) {
                     case Constants.ASSESSMENT_LEVEL_SCORE_CUTOFF: {
                         result.putAll(createResponseMapWithProperStructure(hierarchySection,
                                 assessUtilServ.validateQumlAssessmentV2(questionSetDetailsMap, questionsListFromAssessmentHierarchy,
                                         questionsListFromSubmitRequest, assessUtilServ.readQListfromCache(questionsListFromAssessmentHierarchy, assessmentIdFromRequest, editMode))));
-                        Map<String, Object> finalRes = calculateAssessmentFinalResults(result);
+                        Map<String, Object> finalRes = ProjectUtil.calculateAssessmentFinalResults(result, true, logger);
                         outgoingResponse.getResult().putAll(finalRes);
                         outgoingResponse.getResult().put(Constants.PRIMARY_CATEGORY, assessmentPrimaryCategory);
                         if (!Constants.PRACTICE_QUESTION_SET.equalsIgnoreCase(assessmentPrimaryCategory) && !editMode) {
-                            String questionSetFromAssessmentString = (String) existingAssessmentData
-                                    .get(Constants.ASSESSMENT_READ_RESPONSE_KEY);
-                            Map<String, Object> questionSetFromAssessment = null;
-                            if (StringUtils.isNotBlank(questionSetFromAssessmentString)) {
-                                questionSetFromAssessment = mapper.readValue(questionSetFromAssessmentString,
-                                        new TypeReference<Map<String, Object>>() {
-                                        });
-                            }
+                            Map<String, Object> questionSetFromAssessment = ProjectUtil
+                                    .extractQuestionSetFromAssessment(existingAssessmentData, mapper);
                             writeDataToDatabaseAndTriggerKafkaEvent(submitRequest, email, questionSetFromAssessment, finalRes,
                                     (String) assessmentHierarchy.get(Constants.PRIMARY_CATEGORY),contextId);
                         }
@@ -218,14 +197,8 @@ public class AssessmentServiceV5Impl implements AssessmentServiceV5 {
                     outgoingResponse.getParams().setStatus(Constants.SUCCESS);
                     outgoingResponse.setResponseCode(HttpStatus.OK);
                     outgoingResponse.getResult().put(Constants.PRIMARY_CATEGORY, assessmentPrimaryCategory);
-                    String questionSetFromAssessmentString = (String) existingAssessmentData
-                            .get(Constants.ASSESSMENT_READ_RESPONSE_KEY);
-                    Map<String, Object> questionSetFromAssessment = null;
-                    if (StringUtils.isNotBlank(questionSetFromAssessmentString)) {
-                        questionSetFromAssessment = mapper.readValue(questionSetFromAssessmentString,
-                                new TypeReference<Map<String, Object>>() {
-                                });
-                    }
+                    Map<String, Object> questionSetFromAssessment = ProjectUtil
+                            .extractQuestionSetFromAssessment(existingAssessmentData, mapper);
                     writeDataToDatabaseAndTriggerKafkaEvent(submitRequest, email, questionSetFromAssessment, result,
                             (String) assessmentHierarchy.get(Constants.PRIMARY_CATEGORY),contextId);
                 }else {
@@ -255,60 +228,14 @@ public class AssessmentServiceV5Impl implements AssessmentServiceV5 {
                 .count();
     }
 
-    private Timestamp calculateAssessmentSubmitTime(int expectedDuration, Timestamp assessmentStartTime,
-                                                    int bufferTime) {
-        return ProjectUtil.calculateAssessmentSubmitTime(expectedDuration, assessmentStartTime, bufferTime,
-                serverProperties);
-    }
-
     private String validateSubmitAssessmentRequest(Map<String, Object> submitRequest, String email, String contextId,
                                                    List<Map<String, Object>> hierarchySectionList, List<Map<String, Object>> sectionListFromSubmitRequest,
                                                  Map<String, Object> assessmentHierarchy, Map<String, Object> existingAssessmentData, boolean editMode) throws Exception {
 
         List<Map<String, Object>> existingDataList = assessUtilServ.readUserSubmittedAssessmentRecords(
                 email, (String) submitRequest.get(Constants.IDENTIFIER), contextId);
-        if (existingDataList.isEmpty()) {
-            return Constants.USER_ASSESSMENT_DATA_NOT_PRESENT;
-        } else {
-            existingAssessmentData.putAll(existingDataList.get(0));
-        }
-
-        Date assessmentStartTime = (Date) existingAssessmentData.get(Constants.START_TIME);
-        if (assessmentStartTime == null) {
-            return Constants.READ_ASSESSMENT_START_TIME_FAILED;
-        }
-        int expectedDuration = (Integer) assessmentHierarchy.get(Constants.EXPECTED_DURATION);
-        Timestamp later = calculateAssessmentSubmitTime(expectedDuration,
-                new Timestamp(assessmentStartTime.getTime()),
-                Integer.parseInt(serverProperties.getUserAssessmentSubmissionDuration()));
-        Timestamp submissionTime = new Timestamp(new Date().getTime());
-        int time = submissionTime.compareTo(later);
-        if (time <= 0) {
-            List<String> desiredKeys = Lists.newArrayList(Constants.IDENTIFIER);
-            List<Object> hierarchySectionIds = hierarchySectionList.stream()
-                    .flatMap(x -> desiredKeys.stream().filter(x::containsKey).map(x::get)).collect(toList());
-            List<Object> submitSectionIds = sectionListFromSubmitRequest.stream()
-                    .flatMap(x -> desiredKeys.stream().filter(x::containsKey).map(x::get)).collect(toList());
-            if (!new HashSet<>(hierarchySectionIds).containsAll(submitSectionIds)) {
-                return Constants.WRONG_SECTION_DETAILS;
-            } else {
-                String areQuestionIdsSame = validateIfQuestionIdsAreSame(submitRequest,
-                        sectionListFromSubmitRequest, desiredKeys, email, existingAssessmentData);
-                if (!areQuestionIdsSame.isEmpty())
-                    return areQuestionIdsSame;
-            }
-        } else {
-            return Constants.ASSESSMENT_SUBMIT_EXPIRED;
-        }
-
-        return "";
-    }
-
-    private String validateIfQuestionIdsAreSame(Map<String, Object> submitRequest,
-                                                List<Map<String, Object>> sectionListFromSubmitRequest, List<String> desiredKeys, String userId,
-                                                Map<String, Object> existingAssessmentData) throws Exception {
-        return ProjectUtil.validateIfQuestionIdsAreSame(submitRequest, sectionListFromSubmitRequest, desiredKeys,
-                existingAssessmentData, mapper);
+        return ProjectUtil.validateExistingAssessmentSubmission(existingDataList, existingAssessmentData,
+                assessmentHierarchy, hierarchySectionList, sectionListFromSubmitRequest, serverProperties, mapper);
     }
 
     public Map<String, Object> createResponseMapWithProperStructure(Map<String, Object> hierarchySection,
@@ -345,26 +272,6 @@ public class AssessmentServiceV5Impl implements AssessmentServiceV5 {
                 result >= ((Integer) hierarchySection.get(Constants.MINIMUM_PASS_PERCENTAGE)));
         sectionLevelResult.put(Constants.OVERALL_RESULT, result);
         return sectionLevelResult;
-    }
-
-    private Map<String, Object> calculateAssessmentFinalResults(Map<String, Object> assessmentLevelResult) {
-        Map<String, Object> res = new HashMap<>();
-        try {
-            res.put(Constants.CHILDREN, Collections.singletonList(assessmentLevelResult));
-            Double result = (Double) assessmentLevelResult.get(Constants.RESULT);
-            res.put(Constants.OVERALL_RESULT, result);
-            res.put(Constants.TOTAL, assessmentLevelResult.get(Constants.TOTAL));
-            res.put(Constants.BLANK, assessmentLevelResult.get(Constants.BLANK));
-            res.put(Constants.CORRECT, assessmentLevelResult.get(Constants.CORRECT));
-            res.put(Constants.PASS_PERCENTAGE, assessmentLevelResult.get(Constants.PASS_PERCENTAGE));
-            res.put(Constants.INCORRECT, assessmentLevelResult.get(Constants.INCORRECT));
-            res.put(Constants.NAME, assessmentLevelResult.get(Constants.NAME));
-            Integer minimumPassPercentage = (Integer) assessmentLevelResult.get(Constants.PASS_PERCENTAGE);
-            res.put(Constants.PASS, result >= minimumPassPercentage);
-        } catch (Exception e) {
-            logger.error("Failed to calculate Assessment final results. Exception: ", e);
-        }
-        return res;
     }
 
     private void writeDataToDatabaseAndTriggerKafkaEvent(Map<String, Object> submitRequest, String email,
@@ -924,8 +831,8 @@ public class AssessmentServiceV5Impl implements AssessmentServiceV5 {
 
     private Boolean addAssessmentDataToDB(String email, String name, String contextId, String assessmentIdentifier, Map<String, Object> assessmentAllDetail, Timestamp assessmentStartTime, SBApiResponse outgoingResponse) {
         int expectedDuration = (Integer) assessmentAllDetail.get(Constants.EXPECTED_DURATION);
-        Timestamp assessmentEndTime = calculateAssessmentSubmitTime(expectedDuration,
-                assessmentStartTime, 0);
+        Timestamp assessmentEndTime = ProjectUtil.calculateAssessmentSubmitTime(expectedDuration,
+                assessmentStartTime, 0, serverProperties);
         Map<String, Object> assessmentData = readAssessmentLevelData(assessmentAllDetail);
         assessmentData.put(Constants.START_TIME, assessmentStartTime.getTime());
         assessmentData.put(Constants.END_TIME, assessmentEndTime.getTime());
