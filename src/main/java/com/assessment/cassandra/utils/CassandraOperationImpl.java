@@ -157,8 +157,6 @@ public class CassandraOperationImpl implements CassandraOperation {
 
 	private Select processQuery(String keyspaceName, String tableName, Map<String, Object> propertyMap,
 			List<String> fields) {
-		Select selectQuery = null;
-
 		Builder selectBuilder;
 		if (CollectionUtils.isNotEmpty(fields)) {
 			String[] dbFields = fields.toArray(new String[fields.size()]);
@@ -166,7 +164,19 @@ public class CassandraOperationImpl implements CassandraOperation {
 		} else {
 			selectBuilder = QueryBuilder.select().all();
 		}
-		selectQuery = selectBuilder.from(keyspaceName, tableName);
+		Select selectQuery = selectBuilder.from(keyspaceName, tableName);
+		applyPropertyFilters(selectQuery, propertyMap, true);
+		return selectQuery;
+	}
+
+	/**
+	 * Builds the WHERE clause (eq/in per property) shared by processQuery, processQueryWithoutFiltering,
+	 * getRecordByIdentifierWithPage and getCountOfRecordByIdentifier, which each carried an identical copy.
+	 *
+	 * @param allowFiltering whether to call Select#allowFiltering() after adding each clause, matching
+	 *                       processQuery's original behaviour (the other call sites never set this).
+	 */
+	private void applyPropertyFilters(Select selectQuery, Map<String, Object> propertyMap, boolean allowFiltering) {
 		if (MapUtils.isNotEmpty(propertyMap)) {
 			Where selectWhere = selectQuery.where();
 			for (Entry<String, Object> entry : propertyMap.entrySet()) {
@@ -184,10 +194,11 @@ public class CassandraOperationImpl implements CassandraOperation {
 					selectWhere.and(clause);
 
 				}
-				selectQuery.allowFiltering();
+				if (allowFiltering) {
+					selectQuery.allowFiltering();
+				}
 			}
 		}
-		return selectQuery;
 	}
 
 	@Override
@@ -373,7 +384,6 @@ public class CassandraOperationImpl implements CassandraOperation {
 
 	private Select processQueryWithoutFiltering(String keyspaceName, String tableName, Map<String, Object> propertyMap,
 			List<String> fields) {
-		Select selectQuery = null;
 		Builder selectBuilder;
 		if (CollectionUtils.isNotEmpty(fields)) {
 			String[] dbFields = fields.toArray(new String[fields.size()]);
@@ -381,23 +391,8 @@ public class CassandraOperationImpl implements CassandraOperation {
 		} else {
 			selectBuilder = QueryBuilder.select().all();
 		}
-		selectQuery = selectBuilder.from(keyspaceName, tableName);
-		if (MapUtils.isNotEmpty(propertyMap)) {
-			Where selectWhere = selectQuery.where();
-			for (Entry<String, Object> entry : propertyMap.entrySet()) {
-				if (entry.getValue() instanceof List) {
-					List<Object> list = (List) entry.getValue();
-					if (null != list) {
-						Object[] propertyValues = list.toArray(new Object[list.size()]);
-						Clause clause = QueryBuilder.in(entry.getKey(), propertyValues);
-						selectWhere.and(clause);
-					}
-				} else {
-					Clause clause = QueryBuilder.eq(entry.getKey(), entry.getValue());
-					selectWhere.and(clause);
-				}
-			}
-		}
+		Select selectQuery = selectBuilder.from(keyspaceName, tableName);
+		applyPropertyFilters(selectQuery, propertyMap, false);
 		return selectQuery;
 	}
 
@@ -462,22 +457,7 @@ public class CassandraOperationImpl implements CassandraOperation {
 				selectBuilder = QueryBuilder.select().all();
 			}
 			Select selectQuery = selectBuilder.from(keyspaceName, tableName);
-			if (MapUtils.isNotEmpty(key)) {
-				Where selectWhere = selectQuery.where();
-				for (Entry<String, Object> entry : key.entrySet()) {
-					if (entry.getValue() instanceof List) {
-						List<Object> list = (List) entry.getValue();
-						if (null != list) {
-							Object[] propertyValues = list.toArray(new Object[list.size()]);
-							Clause clause = QueryBuilder.in(entry.getKey(), propertyValues);
-							selectWhere.and(clause);
-						}
-					} else {
-						Clause clause = QueryBuilder.eq(entry.getKey(), entry.getValue());
-						selectWhere.and(clause);
-					}
-				}
-			}
+			applyPropertyFilters(selectQuery, key, false);
 			if (StringUtils.isNotBlank(pageString)) {
 				selectQuery.setPagingState(PagingState.fromString(pageString));
 			}
@@ -521,22 +501,7 @@ public class CassandraOperationImpl implements CassandraOperation {
 			Builder selectBuilder;
 			selectBuilder = QueryBuilder.select().count(field);
 			Select selectQuery = selectBuilder.from(keyspaceName, tableName);
-			if (MapUtils.isNotEmpty(key)) {
-				Where selectWhere = selectQuery.where();
-				for (Entry<String, Object> entry : key.entrySet()) {
-					if (entry.getValue() instanceof List) {
-						List<Object> list = (List) entry.getValue();
-						if (null != list) {
-							Object[] propertyValues = list.toArray(new Object[list.size()]);
-							Clause clause = QueryBuilder.in(entry.getKey(), propertyValues);
-							selectWhere.and(clause);
-						}
-					} else {
-						Clause clause = QueryBuilder.eq(entry.getKey(), entry.getValue());
-						selectWhere.and(clause);
-					}
-				}
-			}
+			applyPropertyFilters(selectQuery, key, false);
 			ResultSet results = session.execute(selectQuery);
 			response = CassandraUtil.createResponse(results);
 			count = ((Long)((Map<String,Object>)response.get(0)).get("system.count(" + field.toLowerCase() + ")"));

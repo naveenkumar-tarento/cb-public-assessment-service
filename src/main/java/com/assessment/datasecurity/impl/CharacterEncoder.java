@@ -112,6 +112,16 @@ public abstract class CharacterEncoder {
    * a final line that is shorter than bytesPerLine().
    */
   public void encode(InputStream inStream, OutputStream outStream) throws IOException {
+    encodeStream(inStream, outStream, false);
+  }
+
+  /**
+   * Shared implementation for encode(InputStream, OutputStream) and encodeBuffer(InputStream,
+   * OutputStream), which differ only in whether the line suffix is written for a final line
+   * shorter than bytesPerLine().
+   */
+  private void encodeStream(InputStream inStream, OutputStream outStream, boolean alwaysWriteLineSuffix)
+      throws IOException {
     int j;
     int numBytes;
     byte tmpbuffer[] = new byte[bytesPerLine()];
@@ -132,7 +142,12 @@ public abstract class CharacterEncoder {
           encodeAtom(outStream, tmpbuffer, j, (numBytes) - j);
         }
       }
-      if (numBytes < bytesPerLine()) {
+      if (alwaysWriteLineSuffix) {
+        encodeLineSuffix(outStream);
+        if (numBytes < bytesPerLine()) {
+          break;
+        }
+      } else if (numBytes < bytesPerLine()) {
         break;
       } else {
         encodeLineSuffix(outStream);
@@ -241,31 +256,7 @@ public abstract class CharacterEncoder {
    * add the line at the end of a final line that is shorter than bytesPerLine().
    */
   public void encodeBuffer(InputStream inStream, OutputStream outStream) throws IOException {
-    int j;
-    int numBytes;
-    byte tmpbuffer[] = new byte[bytesPerLine()];
-
-    encodeBufferPrefix(outStream);
-
-    while (true) {
-      numBytes = readFully(inStream, tmpbuffer);
-      if (numBytes == 0) {
-        break;
-      }
-      encodeLinePrefix(outStream, numBytes);
-      for (j = 0; j < numBytes; j += bytesPerAtom()) {
-        if ((j + bytesPerAtom()) <= numBytes) {
-          encodeAtom(outStream, tmpbuffer, j, bytesPerAtom());
-        } else {
-          encodeAtom(outStream, tmpbuffer, j, (numBytes) - j);
-        }
-      }
-      encodeLineSuffix(outStream);
-      if (numBytes < bytesPerLine()) {
-        break;
-      }
-    }
-    encodeBufferSuffix(outStream);
+    encodeStream(inStream, outStream, true);
   }
 
   /**

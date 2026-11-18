@@ -254,12 +254,6 @@ public class AssessmentServiceV4Impl implements AssessmentServiceV4 {
         return "";
     }
 
-    private void updateErrorDetails(SBApiResponse response, String errMsg, HttpStatus responseCode) {
-        response.getParams().setStatus(Constants.FAILED);
-        response.getParams().setErrmsg(errMsg);
-        response.setResponseCode(responseCode);
-    }
-
     public Map<String, Object> createResponseMapWithProperStructure(Map<String, Object> hierarchySection,
                                                                     Map<String, Object> resultMap) {
         Map<String, Object> sectionLevelResult = new HashMap<>();
@@ -330,15 +324,11 @@ public class AssessmentServiceV4Impl implements AssessmentServiceV4 {
                     List<Map<String, Object>> submitedAssessmentDetails = assessmentRepository.fetchUserAssessmentDataFromDB(email, (String) submitRequest.get(Constants.IDENTIFIER));
                     String recipientName = (String) submitedAssessmentDetails.get(0).get(Constants.NAME);
 
-                    Map<String, Object> propertyMap = new HashMap<>();
-                    propertyMap.put(Constants.IDENTIFIER, submitRequest.get(Constants.COURSE_ID));
-                    List<Map<String, Object>> contentHierarchyDetails = cassandraOperation.getRecordsByProperties(serverProperties.getContentHierarchyNamespace(), serverProperties.getContentHierarchyTable(), propertyMap, null);
-
-                    String contentHierarchyStr = (String) contentHierarchyDetails.get(0).get(Constants.HIERARCHY);
-                    Map<String, Object> contentHierarchyObj = mapper.readValue(contentHierarchyStr, HashMap.class);
-                    String courseProvider = (String) contentHierarchyObj.get(Constants.SOURCE);
-                    String courseName = (String) contentHierarchyObj.get(Constants.NAME);
-                    String coursePosterImage = (String) contentHierarchyObj.get(Constants.POSTER_IMAGE);
+                    Map<String, String> courseMetadata = ProjectUtil.fetchCourseMetadata(
+                            submitRequest.get(Constants.COURSE_ID), cassandraOperation, serverProperties, mapper);
+                    String courseProvider = courseMetadata.get(Constants.SOURCE);
+                    String courseName = courseMetadata.get(Constants.NAME);
+                    String coursePosterImage = courseMetadata.get(Constants.POSTER_IMAGE);
 
 
                     Resource resource = resourceLoader.getResource("classpath:certificate-kafka-json.json");
@@ -401,54 +391,14 @@ public class AssessmentServiceV4Impl implements AssessmentServiceV4 {
 
     private Timestamp calculateAssessmentSubmitTime(int expectedDuration, Timestamp assessmentStartTime,
                                                     int bufferTime) {
-        Calendar cal = Calendar.getInstance();
-        cal.setTimeInMillis(assessmentStartTime.getTime());
-        if (bufferTime > 0) {
-            cal.add(Calendar.SECOND,
-                    expectedDuration + Integer.parseInt(serverProperties.getUserAssessmentSubmissionDuration()));
-        } else {
-            cal.add(Calendar.SECOND, expectedDuration);
-        }
-        return new Timestamp(cal.getTime().getTime());
+        return ProjectUtil.calculateAssessmentSubmitTime(expectedDuration, assessmentStartTime, bufferTime,
+                serverProperties);
     }
 
     private String validateIfQuestionIdsAreSame(Map<String, Object> submitRequest,
                                                 List<Map<String, Object>> sectionListFromSubmitRequest, List<String> desiredKeys, String userId,
                                                 Map<String, Object> existingAssessmentData) throws Exception {
-        String questionSetFromAssessmentString = (String) existingAssessmentData
-                .get(Constants.ASSESSMENT_READ_RESPONSE_KEY);
-        if (StringUtils.isNotBlank(questionSetFromAssessmentString)) {
-            Map<String, Object> questionSetFromAssessment = mapper.readValue(questionSetFromAssessmentString,
-                    new TypeReference<Map<String, Object>>() {
-                    });
-            if (questionSetFromAssessment != null && questionSetFromAssessment.get(Constants.CHILDREN) != null) {
-                List<Map<String, Object>> sections = (List<Map<String, Object>>) questionSetFromAssessment
-                        .get(Constants.CHILDREN);
-                List<String> desiredKey = Lists.newArrayList(Constants.CHILD_NODES);
-                List<Object> questionList = sections.stream()
-                        .flatMap(x -> desiredKey.stream().filter(x::containsKey).map(x::get)).collect(toList());
-                List<Object> questionIdsFromAssessmentHierarchy = new ArrayList<>();
-                List<Map<String, Object>> questionsListFromSubmitRequest = new ArrayList<>();
-                for (Object question : questionList) {
-                    questionIdsFromAssessmentHierarchy.addAll((List<String>) question);
-                }
-                for (Map<String, Object> userSectionData : sectionListFromSubmitRequest) {
-                    if (userSectionData.containsKey(Constants.CHILDREN)
-                            && !ObjectUtils.isEmpty(userSectionData.get(Constants.CHILDREN))) {
-                        questionsListFromSubmitRequest
-                                .addAll((List<Map<String, Object>>) userSectionData.get(Constants.CHILDREN));
-                    }
-                }
-                List<Object> userQuestionIdsFromSubmitRequest = questionsListFromSubmitRequest.stream()
-                        .flatMap(x -> desiredKeys.stream().filter(x::containsKey).map(x::get))
-                        .collect(Collectors.toList());
-                if (!new HashSet<>(questionIdsFromAssessmentHierarchy).containsAll(userQuestionIdsFromSubmitRequest)) {
-                    return Constants.ASSESSMENT_SUBMIT_INVALID_QUESTION;
-                }
-            }
-        } else {
-            return Constants.ASSESSMENT_SUBMIT_QUESTION_READ_FAILED;
-        }
-        return "";
+        return ProjectUtil.validateIfQuestionIdsAreSame(submitRequest, sectionListFromSubmitRequest, desiredKeys,
+                existingAssessmentData, mapper);
     }
 }

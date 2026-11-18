@@ -12,7 +12,6 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.gson.Gson;
 import com.google.gson.reflect.TypeToken;
-import org.apache.commons.collections.CollectionUtils;
 import org.apache.commons.collections.MapUtils;
 import org.apache.commons.lang.StringUtils;
 import org.slf4j.Logger;
@@ -20,7 +19,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
-import org.springframework.util.ObjectUtils;
 
 
 import java.io.IOException;
@@ -174,15 +172,8 @@ public class AssessmentServiceImpl implements AssessmentService {
 
     private Timestamp calculateAssessmentSubmitTime(int expectedDuration, Timestamp assessmentStartTime,
                                                     int bufferTime) {
-        Calendar cal = Calendar.getInstance();
-        cal.setTimeInMillis(assessmentStartTime.getTime());
-        if (bufferTime > 0) {
-            cal.add(Calendar.SECOND,
-                    expectedDuration + Integer.parseInt(serverProperties.getUserAssessmentSubmissionDuration()));
-        } else {
-            cal.add(Calendar.SECOND, expectedDuration);
-        }
-        return new Timestamp(cal.getTime().getTime());
+        return ProjectUtil.calculateAssessmentSubmitTime(expectedDuration, assessmentStartTime, bufferTime,
+                serverProperties);
     }
 
     private void readSectionLevelParams(Map<String, Object> assessmentAllDetail,
@@ -326,20 +317,6 @@ public class AssessmentServiceImpl implements AssessmentService {
     }
 
     private List<String> getQuestionIdList(Map<String, Object> questionListRequest) {
-        try {
-            if (questionListRequest.containsKey(Constants.REQUEST)) {
-                Map<String, Object> request = (Map<String, Object>) questionListRequest.get(Constants.REQUEST);
-                if ((!ObjectUtils.isEmpty(request)) && request.containsKey(Constants.SEARCH)) {
-                    Map<String, Object> searchObj = (Map<String, Object>) request.get(Constants.SEARCH);
-                    if (!ObjectUtils.isEmpty(searchObj) && searchObj.containsKey(Constants.IDENTIFIER)
-                            && !CollectionUtils.isEmpty((List<String>) searchObj.get(Constants.IDENTIFIER))) {
-                        return (List<String>) searchObj.get(Constants.IDENTIFIER);
-                    }
-                }
-            }
-        } catch (Exception e) {
-            logger.error(String.format("Failed to process the questionList request body. %s", e.getMessage()));
-        }
-        return Collections.emptyList();
+        return ProjectUtil.getQuestionIdList(questionListRequest, logger);
     }
 }
