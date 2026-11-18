@@ -616,4 +616,288 @@ class AssessmentUtilServiceV2ImplTest {
 
         assertTrue(result.isEmpty());
     }
+
+    @Test
+    void validateQumlAssessmentV2ShouldHandleMtfQuestionTypeUnderQuestionWeightage() {
+        Map<String, Object> questionSetSectionScheme = new HashMap<>();
+        questionSetSectionScheme.put("easy", 10);
+        Map<String, Object> questionSetDetailsMap = new HashMap<>();
+        questionSetDetailsMap.put(Constants.ASSESSMENT_TYPE, Constants.QUESTION_WEIGHTAGE);
+        questionSetDetailsMap.put(Constants.MINIMUM_PASS_PERCENTAGE, 40);
+        questionSetDetailsMap.put(Constants.TOTAL_MARKS, 10);
+        questionSetDetailsMap.put(Constants.QUESTION_SECTION_SCHEME, questionSetSectionScheme);
+        questionSetDetailsMap.put(Constants.NEGATIVE_MARKING_PERCENTAGE, "0%");
+
+        Map<String, Object> userOption = new HashMap<>();
+        userOption.put(Constants.INDEX, "1");
+        userOption.put(Constants.SELECTED_ANSWER, "a");
+        Map<String, Object> userQ = userQuestion("q1", Constants.MTF, Collections.singletonList(userOption));
+
+        Map<String, Object> ansOption = new HashMap<>();
+        Map<String, Object> valueObj = new HashMap<>();
+        valueObj.put(Constants.VALUE, "1");
+        ansOption.put(Constants.VALUE, valueObj);
+        ansOption.put(Constants.ANSWER, "a");
+        Map<String, Object> answerQ = answerQuestion("q1", Constants.MTF, Collections.singletonList(ansOption));
+        answerQ.put(Constants.QUESTION_LEVEL, "easy");
+
+        Map<String, Object> questionMap = new HashMap<>();
+        questionMap.put("q1", answerQ);
+
+        Map<String, Object> result = service.validateQumlAssessmentV2(questionSetDetailsMap,
+                Collections.singletonList("q1"), Collections.singletonList(userQ), questionMap);
+
+        assertEquals(1, result.get(Constants.CORRECT));
+    }
+
+    @Test
+    void validateQumlAssessmentV2ShouldHandleFtbQuestionTypeUnderQuestionWeightage() {
+        Map<String, Object> questionSetSectionScheme = new HashMap<>();
+        questionSetSectionScheme.put("easy", 10);
+        Map<String, Object> questionSetDetailsMap = new HashMap<>();
+        questionSetDetailsMap.put(Constants.ASSESSMENT_TYPE, Constants.QUESTION_WEIGHTAGE);
+        questionSetDetailsMap.put(Constants.MINIMUM_PASS_PERCENTAGE, 40);
+        questionSetDetailsMap.put(Constants.TOTAL_MARKS, 10);
+        questionSetDetailsMap.put(Constants.QUESTION_SECTION_SCHEME, questionSetSectionScheme);
+        questionSetDetailsMap.put(Constants.NEGATIVE_MARKING_PERCENTAGE, "0%");
+
+        Map<String, Object> userOption = new HashMap<>();
+        userOption.put(Constants.SELECTED_ANSWER, "paris");
+        Map<String, Object> userQ = userQuestion("q1", Constants.FTB, Collections.singletonList(userOption));
+
+        Map<String, Object> ansOption = new HashMap<>();
+        ansOption.put(Constants.ANSWER, true);
+        Map<String, Object> valueObj = new HashMap<>();
+        valueObj.put(Constants.BODY, "paris");
+        ansOption.put(Constants.VALUE, valueObj);
+        Map<String, Object> answerQ = answerQuestion("q1", Constants.FTB, Collections.singletonList(ansOption));
+        answerQ.put(Constants.QUESTION_LEVEL, "easy");
+
+        Map<String, Object> questionMap = new HashMap<>();
+        questionMap.put("q1", answerQ);
+
+        Map<String, Object> result = service.validateQumlAssessmentV2(questionSetDetailsMap,
+                Collections.singletonList("q1"), Collections.singletonList(userQ), questionMap);
+
+        assertEquals(1, result.get(Constants.CORRECT));
+    }
+
+    @Test
+    void validateQumlAssessmentV2ShouldComputeFailSectionResultForLowScore() {
+        Map<String, Object> questionSetSectionScheme = new HashMap<>();
+        questionSetSectionScheme.put("easy", 10);
+        Map<String, Object> questionSetDetailsMap = new HashMap<>();
+        questionSetDetailsMap.put(Constants.ASSESSMENT_TYPE, Constants.QUESTION_WEIGHTAGE);
+        questionSetDetailsMap.put(Constants.MINIMUM_PASS_PERCENTAGE, 90);
+        questionSetDetailsMap.put(Constants.TOTAL_MARKS, 10);
+        questionSetDetailsMap.put(Constants.QUESTION_SECTION_SCHEME, questionSetSectionScheme);
+        questionSetDetailsMap.put(Constants.NEGATIVE_MARKING_PERCENTAGE, "0%");
+
+        // Wrong answer -> no marks awarded -> sectionMarks stays 0, which fails the pass check.
+        Map<String, Object> userQ = userQuestion("q1", Constants.MCQ_SCA,
+                Collections.singletonList(mcqOption("2", true)));
+        Map<String, Object> answerQ = answerQuestion("q1", Constants.MCQ_SCA,
+                Collections.singletonList(mcqAnswerOption("1", true)));
+        answerQ.put(Constants.QUESTION_LEVEL, "easy");
+
+        Map<String, Object> questionMap = new HashMap<>();
+        questionMap.put("q1", answerQ);
+
+        Map<String, Object> result = service.validateQumlAssessmentV2(questionSetDetailsMap,
+                Collections.singletonList("q1"), Collections.singletonList(userQ), questionMap);
+
+        assertEquals(Constants.FAIL, result.get(Constants.SECTION_RESULT));
+    }
+
+    @Test
+    void fetchQuestionIdentifierValueShouldReturnEmptyForEmptyIdentifierList() throws Exception {
+        String result = service.fetchQuestionIdentifierValue(Collections.emptyList(), new ArrayList<>(), "Assessment");
+        assertEquals("", result);
+    }
+
+    @Test
+    void fetchQuestionIdentifierValueShouldAddFilteredQuestionsOnSuccess() throws Exception {
+        when(serverProperties.getAssessmentHost()).thenReturn("http://host");
+        when(serverProperties.getAssessmentQuestionListPath()).thenReturn("/path");
+        when(serverProperties.getSbApiKey()).thenReturn("api-key");
+        when(serverProperties.getAssessmentQuestionParams())
+                .thenReturn(Arrays.asList(Constants.IDENTIFIER, Constants.PRIMARY_CATEGORY));
+
+        Map<String, Object> question = new HashMap<>();
+        question.put(Constants.IDENTIFIER, "q1");
+        question.put(Constants.PRIMARY_CATEGORY, "Assessment");
+        Map<String, Object> questionsResult = new HashMap<>();
+        questionsResult.put(Constants.QUESTIONS, Collections.singletonList(question));
+        Map<String, Object> apiResponse = new HashMap<>();
+        apiResponse.put(Constants.RESPONSE_CODE, Constants.OK);
+        apiResponse.put(Constants.RESULT, questionsResult);
+        when(outboundRequestHandlerService.fetchResultUsingPost(anyString(), any(), any())).thenReturn(apiResponse);
+
+        List<Object> questionList = new ArrayList<>();
+        String result = service.fetchQuestionIdentifierValue(Collections.singletonList("q1"), questionList, "Assessment");
+
+        assertEquals("", result);
+        assertEquals(1, questionList.size());
+    }
+
+    @Test
+    void fetchQuestionIdentifierValueShouldReturnErrorWhenResponseCodeNotOk() throws Exception {
+        when(serverProperties.getAssessmentHost()).thenReturn("http://host");
+        when(serverProperties.getAssessmentQuestionListPath()).thenReturn("/path");
+        when(serverProperties.getSbApiKey()).thenReturn("api-key");
+
+        Map<String, Object> apiResponse = new HashMap<>();
+        apiResponse.put(Constants.RESPONSE_CODE, "FAILED");
+        when(outboundRequestHandlerService.fetchResultUsingPost(anyString(), any(), any())).thenReturn(apiResponse);
+
+        String result = service.fetchQuestionIdentifierValue(Collections.singletonList("q1"), new ArrayList<>(), "Assessment");
+
+        assertTrue(result.contains("Failed to get Question Details"));
+    }
+
+    @Test
+    void filterQuestionMapDetailV2ShouldIncludeEditorStateForPracticeCategory() {
+        when(serverProperties.getAssessmentQuestionParams())
+                .thenReturn(Arrays.asList(Constants.IDENTIFIER, Constants.PRIMARY_CATEGORY));
+
+        Map<String, Object> question = new HashMap<>();
+        question.put(Constants.IDENTIFIER, "q1");
+        question.put(Constants.PRIMARY_CATEGORY, "Practice");
+        Map<String, Object> editorState = Collections.singletonMap("key", "value");
+        question.put(Constants.EDITOR_STATE, editorState);
+
+        Map<String, Object> result = service.filterQuestionMapDetailV2(question, Constants.PRACTICE_QUESTION_SET);
+
+        assertEquals(editorState, result.get(Constants.EDITOR_STATE));
+    }
+
+    @Test
+    void filterQuestionMapDetailV2ShouldShuffleRhsChoicesForMtfCategory() {
+        when(serverProperties.getAssessmentQuestionParams())
+                .thenReturn(Arrays.asList(Constants.IDENTIFIER, Constants.PRIMARY_CATEGORY));
+
+        Map<String, Object> question = new HashMap<>();
+        question.put(Constants.IDENTIFIER, "q1");
+        question.put(Constants.PRIMARY_CATEGORY, Constants.MTF_QUESTION);
+        question.put(Constants.RHS_CHOICES, new ArrayList<>(Arrays.asList("a", "b", "c")));
+
+        Map<String, Object> result = service.filterQuestionMapDetailV2(question, "Assessment");
+
+        List<Object> rhs = (List<Object>) result.get(Constants.RHS_CHOICES);
+        assertEquals(3, rhs.size());
+    }
+
+    @Test
+    void qListFromCacheShouldBuildQuestionMapFromRecursiveHierarchyAndCacheIt() throws Exception {
+        when(redisCacheMgr.getCache(anyString())).thenReturn(null);
+        when(serverProperties.qListFromCacheEnabled()).thenReturn(false);
+        when(serverProperties.getRedisQuestionsReadTimeOut()).thenReturn(1000);
+        when(serverProperties.getAssessmentHierarchyNameSpace()).thenReturn("ns");
+        when(serverProperties.getAssessmentHierarchyTable()).thenReturn("tbl");
+        when(serverProperties.getAssessmentHost()).thenReturn("http://host");
+        when(serverProperties.getAssessmentQuestionListPath()).thenReturn("/path");
+        when(serverProperties.getSbApiKey()).thenReturn("api-key");
+
+        Map<String, Object> leafQuestion = new HashMap<>();
+        leafQuestion.put(Constants.IDENTIFIER, "q2");
+
+        Map<String, Object> nestedQuestionSet = new HashMap<>();
+        nestedQuestionSet.put(Constants.OBJECT_TYPE, Constants.QUESTION_SET);
+        nestedQuestionSet.put(Constants.CHILDREN, Collections.singletonList(leafQuestion));
+
+        Map<String, Object> plainChild = new HashMap<>();
+        plainChild.put(Constants.IDENTIFIER, "q1");
+        plainChild.put(Constants.OBJECT_TYPE, "Question");
+
+        Map<String, Object> assessmentData = new HashMap<>();
+        assessmentData.put(Constants.CHILDREN, Arrays.asList(plainChild, nestedQuestionSet));
+
+        Map<String, Object> dbRow = new HashMap<>();
+        dbRow.put(Constants.HIERARCHY, mapper.writeValueAsString(assessmentData));
+        when(cassandraOperation.getRecordsByPropertiesWithoutFiltering(anyString(), anyString(), anyMap(), any()))
+                .thenReturn(Collections.singletonList(dbRow));
+
+        Map<String, Object> q1Details = new HashMap<>();
+        q1Details.put(Constants.IDENTIFIER, "q1");
+        Map<String, Object> q2Details = new HashMap<>();
+        q2Details.put(Constants.IDENTIFIER, "q2");
+        Map<String, Object> questionsResult = new HashMap<>();
+        questionsResult.put(Constants.QUESTIONS, Arrays.asList(q1Details, q2Details));
+        Map<String, Object> apiResponse = Collections.singletonMap(Constants.RESULT, questionsResult);
+        when(outboundRequestHandlerService.fetchResultUsingPost(anyString(), any(), any())).thenReturn(apiResponse);
+
+        Map<String, Object> result = service.qListFromCache("assess1", false);
+
+        assertTrue(result.containsKey("q1"));
+        assertTrue(result.containsKey("q2"));
+        // Called once to cache the assessment hierarchy and once to cache the resolved question map.
+        verify(redisCacheMgr, org.mockito.Mockito.times(2)).putCache(anyString(), any(), anyInt());
+    }
+
+    @Test
+    void qListFromCacheShouldReturnEmptyWhenChildrenMissing() throws Exception {
+        when(redisCacheMgr.getCache(anyString())).thenReturn(null);
+        when(serverProperties.qListFromCacheEnabled()).thenReturn(false);
+        when(serverProperties.getAssessmentHierarchyNameSpace()).thenReturn("ns");
+        when(serverProperties.getAssessmentHierarchyTable()).thenReturn("tbl");
+
+        Map<String, Object> assessmentData = new HashMap<>();
+        assessmentData.put("someField", "value");
+        Map<String, Object> dbRow = new HashMap<>();
+        dbRow.put(Constants.HIERARCHY, mapper.writeValueAsString(assessmentData));
+        when(cassandraOperation.getRecordsByPropertiesWithoutFiltering(anyString(), anyString(), anyMap(), any()))
+                .thenReturn(Collections.singletonList(dbRow));
+
+        Map<String, Object> result = service.qListFromCache("assess1", false);
+
+        assertTrue(result.isEmpty());
+    }
+
+    @Test
+    void qListFromCacheShouldReturnEmptyWhenRecursiveQuestionIdsEmpty() throws Exception {
+        when(redisCacheMgr.getCache(anyString())).thenReturn(null);
+        when(serverProperties.qListFromCacheEnabled()).thenReturn(false);
+        when(serverProperties.getAssessmentHierarchyNameSpace()).thenReturn("ns");
+        when(serverProperties.getAssessmentHierarchyTable()).thenReturn("tbl");
+
+        Map<String, Object> nestedQuestionSetWithNoChildren = new HashMap<>();
+        nestedQuestionSetWithNoChildren.put(Constants.OBJECT_TYPE, Constants.QUESTION_SET);
+        nestedQuestionSetWithNoChildren.put(Constants.CHILDREN, Collections.emptyList());
+
+        Map<String, Object> assessmentData = new HashMap<>();
+        assessmentData.put(Constants.CHILDREN, Collections.singletonList(nestedQuestionSetWithNoChildren));
+
+        Map<String, Object> dbRow = new HashMap<>();
+        dbRow.put(Constants.HIERARCHY, mapper.writeValueAsString(assessmentData));
+        when(cassandraOperation.getRecordsByPropertiesWithoutFiltering(anyString(), anyString(), anyMap(), any()))
+                .thenReturn(Collections.singletonList(dbRow));
+
+        Map<String, Object> result = service.qListFromCache("assess1", false);
+
+        assertTrue(result.isEmpty());
+    }
+
+    @Test
+    void fetchQuestionMapDetailsShouldBuildMapViaReflection() throws Exception {
+        when(serverProperties.getAssessmentHost()).thenReturn("http://host");
+        when(serverProperties.getAssessmentQuestionListPath()).thenReturn("/path");
+        when(serverProperties.getSbApiKey()).thenReturn("api-key");
+
+        Map<String, Object> question = new HashMap<>();
+        question.put(Constants.IDENTIFIER, "q1");
+        Map<String, Object> questionsResult = new HashMap<>();
+        questionsResult.put(Constants.QUESTIONS, Collections.singletonList(question));
+        Map<String, Object> apiResponse = new HashMap<>();
+        apiResponse.put(Constants.RESPONSE_CODE, Constants.OK);
+        apiResponse.put(Constants.RESULT, questionsResult);
+        when(outboundRequestHandlerService.fetchResultUsingPost(anyString(), any(), any())).thenReturn(apiResponse);
+
+        java.lang.reflect.Method method = AssessmentUtilServiceV2Impl.class
+                .getDeclaredMethod("fetchQuestionMapDetails", String.class);
+        method.setAccessible(true);
+        Object result = method.invoke(service, "q1");
+
+        assertTrue(result instanceof Map);
+        assertTrue(((Map<?, ?>) result).containsKey("q1"));
+    }
 }

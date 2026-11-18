@@ -748,4 +748,206 @@ class AssessmentServiceV5ImplTest {
         assertEquals(0.0, result.get(Constants.RESULT));
         assertFalse((Boolean) result.get(Constants.PASS));
     }
+
+    // ---------- processRandomizationForQuestions (via readAssessment practice path) ----------
+
+    private Map<String, Object> questionWithLevel(String id, String level) {
+        Map<String, Object> q = new HashMap<>();
+        q.put(Constants.IDENTIFIER, id);
+        q.put(Constants.QUESTION_LEVEL, level);
+        return q;
+    }
+
+    @Test
+    void readAssessmentShouldApplyRandomizationLimitsForQuestionWeightageSections() {
+        Map<String, Object> hSection = hierarchySection("s1", 50);
+        hSection.put(Constants.CHILDREN, Arrays.asList(questionWithLevel("q1", "easy"),
+                questionWithLevel("q2", "easy")));
+        Map<String, Object> sectionLevelDefinition = new HashMap<>();
+        sectionLevelDefinition.put("easy", Collections.singletonMap(Constants.NO_OF_QUESTIONS, 1));
+        hSection.put(Constants.SECTION_LEVEL_DEFINITION, sectionLevelDefinition);
+
+        Map<String, Object> hier = new HashMap<>();
+        hier.put(Constants.PRIMARY_CATEGORY, Constants.PRACTICE_QUESTION_SET);
+        hier.put(Constants.ASSESSMENT_TYPE, Constants.QUESTION_WEIGHTAGE);
+        hier.put(Constants.CHILDREN, Collections.singletonList(hSection));
+        when(assessUtilServ.readAssessmentHierarchyFromCache(anyString(), anyBoolean())).thenReturn(hier);
+
+        Map<String, Object> request = new HashMap<>();
+        request.put(Constants.ASSESSMENT_IDENTIFIER, "assess1");
+        SBApiResponse response = service.readAssessment(false, request);
+
+        Map<String, Object> questionSet = (Map<String, Object>) response.getResult().get(Constants.QUESTION_SET);
+        List<Map<String, Object>> sections = (List<Map<String, Object>>) questionSet.get(Constants.CHILDREN);
+        List<String> childNodes = (List<String>) sections.get(0).get(Constants.CHILD_NODES);
+        // Only one "easy" question is allowed per the section-level definition's limit of 1.
+        assertEquals(1, childNodes.size());
+    }
+
+    @Test
+    void readAssessmentShouldReturnAllQuestionsWhenNoRandomizationLimitDefined() {
+        Map<String, Object> hSection = hierarchySection("s1", 50);
+        hSection.put(Constants.CHILDREN, Arrays.asList(questionWithLevel("q1", "easy"),
+                questionWithLevel("q2", "easy")));
+        hSection.put(Constants.SECTION_LEVEL_DEFINITION, Collections.emptyMap());
+
+        Map<String, Object> hier = new HashMap<>();
+        hier.put(Constants.PRIMARY_CATEGORY, Constants.PRACTICE_QUESTION_SET);
+        hier.put(Constants.ASSESSMENT_TYPE, Constants.QUESTION_WEIGHTAGE);
+        hier.put(Constants.CHILDREN, Collections.singletonList(hSection));
+        when(assessUtilServ.readAssessmentHierarchyFromCache(anyString(), anyBoolean())).thenReturn(hier);
+
+        Map<String, Object> request = new HashMap<>();
+        request.put(Constants.ASSESSMENT_IDENTIFIER, "assess1");
+        SBApiResponse response = service.readAssessment(false, request);
+
+        Map<String, Object> questionSet = (Map<String, Object>) response.getResult().get(Constants.QUESTION_SET);
+        List<Map<String, Object>> sections = (List<Map<String, Object>>) questionSet.get(Constants.CHILDREN);
+        List<String> childNodes = (List<String>) sections.get(0).get(Constants.CHILD_NODES);
+        // No qualifying randomization limit -> all questions pass through unfiltered.
+        assertEquals(2, childNodes.size());
+    }
+
+    // ---------- handleAssessmentReadForPublicAssessments extra branches ----------
+
+    @Test
+    void readAssessmentShouldReturnInProgressQuestionSetForCourseAssessment() throws Exception {
+        Map<String, Object> hier = assessmentLevelHierarchy(Constants.COURSE_ASSESSMENT, Collections.emptyList());
+        when(assessUtilServ.readAssessmentHierarchyFromCache(anyString(), anyBoolean())).thenReturn(hier);
+
+        Map<String, Object> existingQuestionSet = Collections.singletonMap("existingKey", "existingValue");
+        Date futureEndTime = new Date(System.currentTimeMillis() + 3600_000L);
+        Map<String, Object> existing = new HashMap<>();
+        existing.put(Constants.END_TIME, futureEndTime);
+        existing.put(Constants.STATUS, Constants.NOT_SUBMITTED);
+        existing.put(Constants.ASSESSMENT_READ_RESPONSE_KEY, mapper.writeValueAsString(existingQuestionSet));
+        when(assessUtilServ.readUserSubmittedAssessmentRecords(anyString(), anyString(), any()))
+                .thenReturn(Collections.singletonList(existing));
+
+        Map<String, Object> request = new HashMap<>();
+        request.put(Constants.ASSESSMENT_IDENTIFIER, "assess1");
+        request.put(Constants.EMAIL, "user@example.com");
+        request.put(Constants.NAME, "John Doe");
+        request.put(Constants.CONTEXT_ID, "ctx1");
+
+        SBApiResponse response = service.readAssessment(false, request);
+
+        Map<String, Object> questionSet = (Map<String, Object>) response.getResult().get(Constants.QUESTION_SET);
+        assertEquals("existingValue", questionSet.get("existingKey"));
+    }
+
+    @Test
+    void readAssessmentShouldReportStartTimeFailureWhenRetrySubmitDoesNotUpdateDb() {
+        Map<String, Object> hSection = hierarchySection("s1", 50);
+        hSection.put(Constants.EXPECTED_DURATION, 3600);
+        Map<String, Object> hier = assessmentLevelHierarchy(Constants.COURSE_ASSESSMENT,
+                Collections.singletonList(hSection));
+        hier.put(Constants.EXPECTED_DURATION, 3600);
+        when(assessUtilServ.readAssessmentHierarchyFromCache(anyString(), anyBoolean())).thenReturn(hier);
+
+        Date pastEndTime = new Date(System.currentTimeMillis() - 3600_000L);
+        Map<String, Object> existing = new HashMap<>();
+        existing.put(Constants.END_TIME, pastEndTime);
+        existing.put(Constants.STATUS, Constants.SUBMITTED);
+        existing.put(Constants.PASS_STATUS, false);
+        when(assessUtilServ.readUserSubmittedAssessmentRecords(anyString(), anyString(), any()))
+                .thenReturn(Collections.singletonList(existing));
+        when(assessmentRepository.addUserAssesmentDataToDB(anyString(), anyString(), any(), any(), any(), anyString(),
+                anyString(), any())).thenReturn(false);
+
+        Map<String, Object> request = new HashMap<>();
+        request.put(Constants.ASSESSMENT_IDENTIFIER, "assess1");
+        request.put(Constants.EMAIL, "user@example.com");
+        request.put(Constants.NAME, "John Doe");
+        request.put(Constants.CONTEXT_ID, "ctx1");
+
+        SBApiResponse response = service.readAssessment(false, request);
+
+        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, response.getResponseCode());
+        assertEquals(Constants.ASSESSMENT_DATA_START_TIME_NOT_UPDATED, response.getParams().getErrmsg());
+    }
+
+    // ---------- SECTION_LEVEL_SCORE_CUTOFF full non-editMode success path ----------
+
+    @Test
+    void submitAssessmentAsyncShouldWriteToDbAndTriggerKafkaForSectionLevelScoreCutoff() throws Exception {
+        Map<String, Object> hSection = hierarchySection("s1", 50);
+        hSection.put(Constants.SECTION_LEVEL_DEFINITION, Collections.emptyMap());
+        hSection.put(Constants.EXPECTED_DURATION, 3600);
+        Map<String, Object> hier = sectionLevelHierarchy("Assessment", Collections.singletonList(hSection), 40);
+        hier.put(Constants.EXPECTED_DURATION, 3600);
+        when(assessUtilServ.readAssessmentHierarchyFromCache(anyString(), anyBoolean())).thenReturn(hier);
+        when(assessUtilServ.readQListfromCache(any(), anyString(), anyBoolean())).thenReturn(Collections.emptyMap());
+        when(assessUtilServ.validateQumlAssessmentV2(any(), any(), any(), any()))
+                .thenReturn(qumlV2Result(90.0, 0, 9, 1, Constants.PASS, 10, 9.0));
+
+        Map<String, Object> existingQuestionSet = new HashMap<>();
+        existingQuestionSet.put(Constants.START_TIME, System.currentTimeMillis());
+        Map<String, Object> sectionWithChildNodes = new HashMap<>();
+        sectionWithChildNodes.put(Constants.CHILD_NODES, Collections.singletonList("q1"));
+        existingQuestionSet.put(Constants.CHILDREN, Collections.singletonList(sectionWithChildNodes));
+
+        Map<String, Object> existing = new HashMap<>();
+        existing.put(Constants.START_TIME, new Date());
+        existing.put(Constants.ASSESSMENT_READ_RESPONSE_KEY, mapper.writeValueAsString(existingQuestionSet));
+        Map<String, Object> otherRetakeRecord = new HashMap<>();
+        otherRetakeRecord.put(Constants.SUBMIT_ASSESSMENT_RESPONSE_KEY, "{}");
+        when(assessUtilServ.readUserSubmittedAssessmentRecords(anyString(), anyString(), any()))
+                .thenReturn(Arrays.asList(existing, otherRetakeRecord));
+        when(serverProperties.getUserAssessmentSubmissionDuration()).thenReturn("10");
+        when(serverProperties.getAssessmentPrimaryKeyNotAllowedCertificate())
+                .thenReturn(Collections.singletonList("SomeOtherCategory"));
+        when(assessmentRepository.updateUserAssesmentDataToDB(anyString(), anyString(), any(), any(), anyString(),
+                any(), any(), anyString())).thenReturn(true);
+
+        List<Map<String, Object>> submittedDetails = new ArrayList<>();
+        Map<String, Object> detail = new HashMap<>();
+        detail.put(Constants.NAME, "John Doe");
+        submittedDetails.add(detail);
+        when(assessmentRepository.fetchUserAssessmentDataFromDB(anyString(), anyString())).thenReturn(submittedDetails);
+
+        List<Map<String, Object>> contentHierarchyDetails = new ArrayList<>();
+        Map<String, Object> contentDetail = new HashMap<>();
+        Map<String, Object> hierarchyObj = new HashMap<>();
+        hierarchyObj.put(Constants.SOURCE, "provider1");
+        hierarchyObj.put(Constants.NAME, "Course Name");
+        hierarchyObj.put(Constants.POSTER_IMAGE, "http://image.url");
+        contentDetail.put(Constants.HIERARCHY, mapper.writeValueAsString(hierarchyObj));
+        contentHierarchyDetails.add(contentDetail);
+        when(cassandraOperation.getRecordsByProperties(any(), any(), any(), any())).thenReturn(contentHierarchyDetails);
+
+        when(resourceLoader.getResource(anyString())).thenReturn(new ByteArrayResource("{}".getBytes()));
+        when(decryptionService.decryptData(anyString())).thenReturn("decrypted-email");
+
+        Map<String, Object> request = submitRequest("assess1", "user@example.com",
+                Collections.singletonList(submitSection("s1")));
+        SBApiResponse response = service.submitAssessmentAsync(request, false);
+
+        assertEquals(HttpStatus.OK, response.getResponseCode());
+        assertEquals(1, response.getResult().get(Constants.RETAKE_ATTEMPT_CONSUMED));
+    }
+
+    // ---------- validateUserAssementData (dead code reachable only via reflection) ----------
+
+    @Test
+    void validateUserAssementDataShouldReportMissingDataViaReflection() throws Exception {
+        java.lang.reflect.Method method = AssessmentServiceV5Impl.class
+                .getDeclaredMethod("validateUserAssementData", List.class);
+        method.setAccessible(true);
+
+        Object result = method.invoke(service, Collections.emptyList());
+        assertEquals("User assessment data not found", result);
+    }
+
+    @Test
+    void validateUserAssementDataShouldReportNotPassedViaReflection() throws Exception {
+        java.lang.reflect.Method method = AssessmentServiceV5Impl.class
+                .getDeclaredMethod("validateUserAssementData", List.class);
+        method.setAccessible(true);
+
+        Map<String, Object> data = new HashMap<>();
+        data.put(Constants.PASS_STATUS, false);
+        Object result = method.invoke(service, Collections.singletonList(data));
+        assertEquals("assessment is not passed", result);
+    }
 }
